@@ -213,6 +213,7 @@ public:
         cache[path] = cs;
         return &cache[path];
     }
+    const std::map<std::string, CachedSpritesheet>& getCache() const { return cache; }
 
     void clear() {
         for (auto& pair : cache) {

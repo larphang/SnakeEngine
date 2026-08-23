@@ -84,6 +84,7 @@ class InGameVideoPlayer;
 class PlayState : public MusicBeatState {
     friend class LuaManager;
     friend class PauseSubState;
+    friend class MemoryDebugState;
 public:
     static PlayState* instance; // Quick global access for Lua logic
     InGameVideoPlayer* inGameVideo = nullptr;
@@ -448,7 +449,7 @@ private:
     C3D_RenderTarget* top;
     C3D_RenderTarget* bottom;
 
-    C2D_SpriteSheet noteSheet;
+    C2D_SpriteSheet noteSheet = nullptr;
     C2D_SpriteSheet fastNoteSheet = nullptr;  // NoteSheetFast
     C2D_Image       fastNoteBaseImg;
     std::vector<NoteSprite> fastNoteSubtexs; // [0]=note, [1]=tail, [2]=noteholdend
@@ -472,7 +473,7 @@ private:
     u32 currentLyricsColor;
     float currentLyricsSize;
     
-    Stage* currentStage;
+    Stage* currentStage = nullptr;
     
     bool paused = false;
     class PauseSubState* pauseSubState = nullptr;

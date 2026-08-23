@@ -8,6 +8,13 @@
 
 class OptionsMenuState : public MusicBeatState {
 public:
+    struct UiSprite {
+        C3D_Tex* tex = nullptr;
+        Tex3DS_SubTexture sub;
+        float w = 0.0f;
+        float h = 0.0f;
+    };
+
     static bool onPlayState;
     static bool isStoryMode;
     static std::string songName;
@@ -48,7 +55,6 @@ private:
     C2D_Image topBG;
     C2D_Image bottomBG;
 
-    // Note sprites for color picker preview
     C2D_SpriteSheet noteSheetNormal = nullptr;
     C2D_SpriteSheet noteSheetFast   = nullptr;
     C2D_Image       baseNoteImgNormal;
@@ -56,8 +62,21 @@ private:
     std::vector<NoteSprite> noteSubsNormal;
     std::vector<NoteSprite> noteSubsFast;
 
+    C2D_SpriteSheet colorWheelSheet = nullptr;
+    C2D_Image       colorWheel;
+
+    C2D_SpriteSheet copyPasteSheet = nullptr;
+    UiSprite        copyBtnSprite;
+    UiSprite        pasteBtnSprite;
+
     C2D_Font   vcrFont    = nullptr;
     C2D_TextBuf vcrFontBuf = nullptr;
+
+    float currentHue = 0.0f;
+    float currentSat = 0.0f;
+    float currentVal = 1.0f;
+    void rgbToHsv(unsigned char r, unsigned char g, unsigned char b, float& h, float& s, float& v);
+    void hsvToRgb(float h, float s, float v, unsigned char& r, unsigned char& g, unsigned char& b);
 
 public:
     struct CheckboxState {

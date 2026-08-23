@@ -42,6 +42,14 @@ public:
     static bool paused;
     static long actualSampleRate;
 
+    struct SoundData {
+        int16_t* buffer;
+        uint32_t samplesPerChannel;
+        int channels;
+        int rate;
+    };
+    static const std::map<std::string, SoundData>& getSoundCache() { return soundCache; }
+
 private:
     static void fill(int id, bool countAsPlayed, bool isVocals = false);
     
@@ -76,12 +84,6 @@ private:
 
     // SFX decoding data
     struct SfxData {
-        int16_t* buffer;
-        uint32_t samplesPerChannel;
-        int channels;
-        int rate;
-    };
-    struct SoundData {
         int16_t* buffer;
         uint32_t samplesPerChannel;
         int channels;

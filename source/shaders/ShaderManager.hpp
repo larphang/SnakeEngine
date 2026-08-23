@@ -48,6 +48,8 @@ public:
     void setCameraExtended(const std::string& camera, bool extended);
     bool isCameraExtended(const std::string& camera) const;
 
+    std::vector<std::pair<std::string, C3D_Tex*>> getActiveTargets() const;
+
 private:
     ShaderManager();
     ~ShaderManager();

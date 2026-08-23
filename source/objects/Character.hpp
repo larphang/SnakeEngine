@@ -151,10 +151,10 @@ public:
     bool specialAnim = false;
     std::string curCharacterName = "";
     std::string charTexturePath = "";
+    C2D_SpriteSheet sheet; 
 
 private:
     void* fileBuffer = nullptr;
-    C2D_SpriteSheet sheet; 
     C2D_Image mainImage; // Base texture
     C3D_Tex* rawTex = nullptr;
     Tex3DS_SubTexture* rawSub = nullptr;

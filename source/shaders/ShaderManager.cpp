@@ -31,8 +31,6 @@ void ShaderManager::init() {
     if (helperRT2.active && helperRT2.tex.height != helperHeight) {
         helperRT2.cleanup();
     }
-    if (!helperRT.active)  helperRT.init(512, helperHeight);
-    if (!helperRT2.active) helperRT2.init(512, helperHeight);
 }
 
 void ShaderManager::cleanup() {
@@ -383,6 +381,23 @@ void ShaderManager::presentCamera(const std::string& camName, C3D_RenderTarget* 
     const RT* finalSrc = &cameraRT;
     if (hasShaders) {
         const ShaderStack& stack = it->second;
+        
+        int helperHeight = isExtended ? 512 : 256;
+        if (!helperRT.active) {
+            helperRT.init(512, helperHeight);
+        } else if (helperRT.tex.height != helperHeight) {
+            helperRT.cleanup();
+            helperRT.init(512, helperHeight);
+        }
+        if (stack.size() > 1) {
+            if (!helperRT2.active) {
+                helperRT2.init(512, helperHeight);
+            } else if (helperRT2.tex.height != helperHeight) {
+                helperRT2.cleanup();
+                helperRT2.init(512, helperHeight);
+            }
+        }
+
         if (stack.size() == 1) {
             C2D_SceneBegin(helperRT.target);
             C2D_TargetClear(helperRT.target, C2D_Color32(0, 0, 0, 0));
@@ -514,4 +529,16 @@ void ShaderManager::drawShaderEffect(const std::string& camera, const RT& rt, C3
     C2D_Flush();
     // Restore default blend for direct-to-screen draws.
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA);
+}
+
+std::vector<std::pair<std::string, C3D_Tex*>> ShaderManager::getActiveTargets() const {
+    std::vector<std::pair<std::string, C3D_Tex*>> result;
+    for (const auto& pair : targets) {
+        if (pair.second.active) {
+            result.push_back({pair.first, (C3D_Tex*)&pair.second.tex});
+        }
+    }
+    if (helperRT.active) result.push_back({"helperRT", (C3D_Tex*)&helperRT.tex});
+    if (helperRT2.active) result.push_back({"helperRT2", (C3D_Tex*)&helperRT2.tex});
+    return result;
 }

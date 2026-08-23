@@ -1,4 +1,6 @@
 #include "PauseSubState.hpp"
+#include "MemoryDebugState.hpp"
+#include <malloc.h>
 #include "../states/PlayState.hpp"
 #include "../options/OptionsMenuState.hpp"
 #include "../states/StoryMenuState.hpp"
@@ -7,7 +9,7 @@
 #include "../objects/Alphabet.hpp"
 #include "../objects/InGameVideoPlayer.hpp"
 #include "../backend/Macros.hpp"
-
+#include "../backend/savedata/ClientPrefs.hpp"
 extern C2D_Font globalVCRFont;
 
 PauseSubState::PauseSubState() {
@@ -16,6 +18,9 @@ PauseSubState::PauseSubState() {
     std::vector<std::string> mainItems = {"Resume", "Restart Song"};
     if (PlayState::instance->curSongDifficulties.size() >= 2) {
         mainItems.push_back("Change Difficulty");
+    }
+    if (ClientPrefs::debugInfo) {
+        mainItems.push_back("Memory Debug");
     }
     mainItems.push_back("Options");
     mainItems.push_back("Exit to menu");
@@ -26,6 +31,9 @@ PauseSubState::PauseSubState() {
 PauseSubState::~PauseSubState() {
     if (pauseTextBuf) {
         C2D_TextBufDelete(pauseTextBuf);
+    }
+    if (memoryDebugState) {
+        delete memoryDebugState;
     }
 }
 
@@ -42,6 +50,15 @@ void PauseSubState::setupPauseMenu(const std::vector<std::string>& items, const 
 }
 
 void PauseSubState::update(float dt) {
+    if (memoryDebugState) {
+        memoryDebugState->update(dt);
+        if (!memoryDebugState->active) {
+            delete memoryDebugState;
+            memoryDebugState = nullptr;
+        }
+        return;
+    }
+
     u32 kDown = hidKeysDown();
     
     pauseLerpSelection += (pauseSelection - pauseLerpSelection) * (dt * 15.0f);
@@ -62,6 +79,7 @@ void PauseSubState::update(float dt) {
             pauseMenuState = PAUSE_MAIN;
             std::vector<std::string> mainItems = {"Resume", "Restart Song"};
             if (PlayState::instance->curSongDifficulties.size() >= 2) mainItems.push_back("Change Difficulty");
+            if (ClientPrefs::debugInfo) mainItems.push_back("Memory Debug");
             mainItems.push_back("Options");
             mainItems.push_back("Exit to menu");
             setupPauseMenu(mainItems, "PAUSED");
@@ -105,6 +123,8 @@ void PauseSubState::update(float dt) {
                     OptionsMenuState::storySongIdx = PlayState::instance->curSongIdx;
                 }
                 MusicBeatState::switchState(new OptionsMenuState());
+            } else if (sel == "Memory Debug") {
+                memoryDebugState = new MemoryDebugState();
             } else if (sel == "Exit to menu") {
                 if (PlayState::instance->isStoryMode) {
                     MusicBeatState::switchState(new StoryMenuState());
@@ -135,6 +155,11 @@ void PauseSubState::update(float dt) {
 }
 
 void PauseSubState::draw() {
+    if (memoryDebugState) {
+        memoryDebugState->draw();
+        return;
+    }
+
     C2D_SceneBegin(PlayState::instance->top);
     float bw = (float)ScreenWidthTop;
     float bh = (float)ScreenHeight;

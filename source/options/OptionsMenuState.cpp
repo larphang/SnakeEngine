@@ -19,6 +19,9 @@ std::string OptionsMenuState::difficultyName = "";
 WeekData OptionsMenuState::storyWeek = WeekData();
 int OptionsMenuState::storySongIdx = 0;
 
+static unsigned char copiedColor[3] = {0, 0, 0};
+static bool hasCopiedColor = false;
+
 static void drawBG(C2D_Image img, bool valid, float w, float h) {
     if (valid) {
         C2D_ImageTint tint;
@@ -104,11 +107,35 @@ static void drawCheckbox(float x, float y, const OptionsMenuState::CheckboxState
     }
 }
 
-static void hsvToRgb(float h, float s, float v, unsigned char& r, unsigned char& g, unsigned char& b) {
+void OptionsMenuState::rgbToHsv(unsigned char r, unsigned char g, unsigned char b, float& h, float& s, float& v) {
+    float rf = r / 255.0f;
+    float gf = g / 255.0f;
+    float bf = b / 255.0f;
+    float maxC = std::max(std::max(rf, gf), bf);
+    float minC = std::min(std::min(rf, gf), bf);
+    float delta = maxC - minC;
+    v = maxC;
+    if (maxC == 0.0f) {
+        s = 0.0f;
+        h = 0.0f;
+    } else {
+        s = delta / maxC;
+        if (delta == 0.0f) {
+            h = 0.0f;
+        } else {
+            if (maxC == rf) h = 60.0f * fmodf(((gf - bf) / delta) + 6.0f, 6.0f);
+            else if (maxC == gf) h = 60.0f * (((bf - rf) / delta) + 2.0f);
+            else if (maxC == bf) h = 60.0f * (((rf - gf) / delta) + 4.0f);
+            if (h < 0.0f) h += 360.0f;
+        }
+    }
+}
+
+void OptionsMenuState::hsvToRgb(float h, float s, float v, unsigned char& r, unsigned char& g, unsigned char& b) {
     float c = v * s;
     float x = c * (1.0f - fabsf(fmodf(h / 60.0f, 2.0f) - 1.0f));
     float m = v - c;
-    float rr, gg, bb;
+    float rr = 0, gg = 0, bb = 0;
     if      (h < 60)  { rr=c;  gg=x;  bb=0; }
     else if (h < 120) { rr=x;  gg=c;  bb=0; }
     else if (h < 180) { rr=0;  gg=c;  bb=x; }
@@ -161,42 +188,107 @@ static void parseNoteXml(const std::string& xmlPath, C3D_Tex* tex, C2D_Image bas
         float frameWidth = getValFloat("frameWidth");
         float frameHeight = getValFloat("frameHeight");
 
-        int group = -1;
-        if (name.find("purple") != std::string::npos) group = 0;
-        else if (name.find("blue") != std::string::npos) group = 1;
-        else if (name.find("green") != std::string::npos) group = 2;
-        else if (name.find("red") != std::string::npos) group = 3;
+        int lane = -1;
+        int slot = -1;
 
-        if (group != -1) {
-            int subType = -1;
-            if (name.find("confirm") != std::string::npos) subType = 0;
-            else if (name.find("press") != std::string::npos) subType = 3;
-            else if (name.find("hold end") != std::string::npos || name.find("HoldEnd") != std::string::npos) subType = 5;
-            else if (name.find("hold piece") != std::string::npos || name.find("HoldPiece") != std::string::npos) subType = 4;
-            else if (name.find("arrow") != std::string::npos) subType = 2;
-            else if (name.find("receptor") != std::string::npos) subType = 1;
+        if (name.find("arrowLEFT") != std::string::npos) { lane = 0; slot = 1; }
+        else if (name.find("arrowDOWN") != std::string::npos) { lane = 1; slot = 1; }
+        else if (name.find("arrowUP") != std::string::npos) { lane = 2; slot = 1; }
+        else if (name.find("arrowRIGHT") != std::string::npos) { lane = 3; slot = 1; }
 
-            if (subType != -1) {
-                int slot = group * 6 + subType;
-                NoteSprite& ns = subs[slot];
-                ns.tex = tex;
-                ns.rotated = rotated;
-                ns.w = w;
-                ns.h = h;
-                ns.frameX = frameX;
-                ns.frameY = frameY;
-                ns.frameWidth = frameWidth ? frameWidth : w;
-                ns.frameHeight = frameHeight ? frameHeight : h;
+        else if (name.find("purple") != std::string::npos && name.find("hold") == std::string::npos && name.find("press") == std::string::npos && name.find("confirm") == std::string::npos) { lane = 0; slot = 2; }
+        else if (name.find("blue") != std::string::npos && name.find("hold") == std::string::npos && name.find("press") == std::string::npos && name.find("confirm") == std::string::npos) { lane = 1; slot = 2; }
+        else if (name.find("green") != std::string::npos && name.find("hold") == std::string::npos && name.find("press") == std::string::npos && name.find("confirm") == std::string::npos) { lane = 2; slot = 2; }
+        else if (name.find("red") != std::string::npos && name.find("hold") == std::string::npos && name.find("press") == std::string::npos && name.find("confirm") == std::string::npos) { lane = 3; slot = 2; }
 
-                float pw = rotated ? h : w;
-                float ph = rotated ? w : h;
-                ns.sub.width = (u16)pw;
-                ns.sub.height = (u16)ph;
-                ns.sub.left = baseImg.subtex->left + (x * nw / baseImg.subtex->width);
-                ns.sub.top = baseImg.subtex->top + (y * nh / baseImg.subtex->height);
-                ns.sub.right = baseImg.subtex->left + ((x + pw) * nw / baseImg.subtex->width);
-                ns.sub.bottom = baseImg.subtex->top + ((y + ph) * nh / baseImg.subtex->height);
-            }
+        else if (name.find("left press") != std::string::npos) { lane = 0; slot = 3; }
+        else if (name.find("down press") != std::string::npos) { lane = 1; slot = 3; }
+        else if (name.find("green press") != std::string::npos || name.find("up press") != std::string::npos) { lane = 2; slot = 3; }
+        else if (name.find("right press") != std::string::npos) { lane = 3; slot = 3; }
+
+        else if (name.find("left confirm") != std::string::npos) { lane = 0; slot = 0; }
+        else if (name.find("down confirm") != std::string::npos) { lane = 1; slot = 0; }
+        else if (name.find("up confirm") != std::string::npos) { lane = 2; slot = 0; }
+        else if (name.find("right confirm") != std::string::npos) { lane = 3; slot = 0; }
+
+        else if (name.find("purple hold piece") != std::string::npos) { lane = 0; slot = 4; }
+        else if (name.find("blue hold piece") != std::string::npos) { lane = 1; slot = 4; }
+        else if (name.find("green hold piece") != std::string::npos) { lane = 2; slot = 4; }
+        else if (name.find("red hold piece") != std::string::npos) { lane = 3; slot = 4; }
+
+        else if (name.find("purple end hold") != std::string::npos || name.find("pruple hold end") != std::string::npos) { lane = 0; slot = 5; }
+        else if (name.find("blue hold end") != std::string::npos) { lane = 1; slot = 5; }
+        else if (name.find("green hold end") != std::string::npos) { lane = 2; slot = 5; }
+        else if (name.find("red hold end") != std::string::npos) { lane = 3; slot = 5; }
+
+        if (lane != -1 && slot != -1) {
+            int destIdx = lane * 6 + slot;
+            NoteSprite& ns = subs[destIdx];
+            ns.tex = tex;
+            ns.rotated = rotated;
+            ns.w = w;
+            ns.h = h;
+            ns.frameX = frameX;
+            ns.frameY = frameY;
+            ns.frameWidth = frameWidth ? frameWidth : w;
+            ns.frameHeight = frameHeight ? frameHeight : h;
+
+            float pw = rotated ? h : w;
+            float ph = rotated ? w : h;
+            ns.sub.width = (u16)pw;
+            ns.sub.height = (u16)ph;
+            ns.sub.left = baseImg.subtex->left + (x * nw / baseImg.subtex->width);
+            ns.sub.top = baseImg.subtex->top + (y * nh / baseImg.subtex->height);
+            ns.sub.right = baseImg.subtex->left + ((x + pw) * nw / baseImg.subtex->width);
+            ns.sub.bottom = baseImg.subtex->top + ((y + ph) * nh / baseImg.subtex->height);
+        }
+    }
+}
+
+static void parseUiXml(const std::string& xmlPath, C3D_Tex* tex, C2D_Image baseImg, OptionsMenuState::UiSprite& copySprite, OptionsMenuState::UiSprite& pasteSprite) {
+    std::ifstream f(xmlPath);
+    if (!f.is_open()) return;
+    float nw = baseImg.subtex->right  - baseImg.subtex->left;
+    float nh = baseImg.subtex->bottom - baseImg.subtex->top;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.find("<SubTexture") == std::string::npos) continue;
+        auto getValString = [&](const std::string& key) {
+            size_t p = line.find(" " + key);
+            if (p == std::string::npos) return std::string("");
+            p = line.find("=", p + key.size() + 1);
+            if (p == std::string::npos) return std::string("");
+            p = line.find("\"", p + 1);
+            if (p == std::string::npos) return std::string("");
+            size_t e = line.find("\"", p + 1);
+            if (e == std::string::npos) return std::string("");
+            return line.substr(p + 1, e - p - 1);
+        };
+        auto getValFloat = [&](const std::string& key) {
+            std::string val = getValString(key);
+            return val.empty() ? 0.0f : (float)atof(val.c_str());
+        };
+
+        std::string name = getValString("name");
+        float x = getValFloat("x");
+        float y = getValFloat("y");
+        float w = getValFloat("width");
+        float h = getValFloat("height");
+
+        OptionsMenuState::UiSprite* dest = nullptr;
+        if (name == "copy") dest = &copySprite;
+        else if (name == "paste") dest = &pasteSprite;
+
+        if (dest) {
+            dest->tex = tex;
+            dest->w = w;
+            dest->h = h;
+            dest->sub.width = (u16)w;
+            dest->sub.height = (u16)h;
+            dest->sub.left = baseImg.subtex->left + (x * nw / baseImg.subtex->width);
+            dest->sub.top = baseImg.subtex->top + (y * nh / baseImg.subtex->height);
+            dest->sub.right = baseImg.subtex->left + ((x + w) * nw / baseImg.subtex->width);
+            dest->sub.bottom = baseImg.subtex->top + ((y + h) * nh / baseImg.subtex->height);
         }
     }
 }
@@ -243,9 +335,9 @@ static void parseNoteFastXml(const std::string& xmlPath, C3D_Tex* tex, C2D_Image
         float frameHeight = getValFloat("frameHeight");
 
         int slot = -1;
-        if (name.find("Note0") != std::string::npos) { slot = 0; }
-        else if (name.find("Tail0") != std::string::npos) { slot = 1; }
-        else if (name.find("NoteHoldEnd0") != std::string::npos) { slot = 2; }
+        if (name.find("NoteHoldEnd") != std::string::npos) { slot = 2; }
+        else if (name.find("Tail") != std::string::npos) { slot = 1; }
+        else if (name.find("Note") != std::string::npos) { slot = 0; }
 
         if (slot != -1) {
             NoteSprite& ns = subs[slot];
@@ -299,17 +391,32 @@ void OptionsMenuState::init() {
     }
 
     // Load note sprites for the Note Colors screen
-    noteSheetNormal = C2D_SpriteSheetLoad("romfs:/shared/images/NOTE_assets.t3x");
+    noteSheetNormal = C2D_SpriteSheetLoad("romfs:/shared/images/noteSkins/NOTE_assets.t3x");
     if (noteSheetNormal) {
         baseNoteImgNormal = C2D_SpriteSheetGetImage(noteSheetNormal, 0);
         if (baseNoteImgNormal.tex) C3D_TexSetFilter(baseNoteImgNormal.tex, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST);
-        parseNoteXml("romfs:/shared/images/NOTE_assets.xml", baseNoteImgNormal.tex, baseNoteImgNormal, noteSubsNormal);
+        parseNoteXml("romfs:/shared/images/noteSkins/NOTE_assets.xml", baseNoteImgNormal.tex, baseNoteImgNormal, noteSubsNormal);
     }
     noteSheetFast = C2D_SpriteSheetLoad("romfs:/shared/images/noteSkins/NoteSheetFast.t3x");
     if (noteSheetFast) {
         baseNoteImgFast = C2D_SpriteSheetGetImage(noteSheetFast, 0);
         if (baseNoteImgFast.tex) C3D_TexSetFilter(baseNoteImgFast.tex, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST);
         parseNoteFastXml("romfs:/shared/images/noteSkins/NoteSheetFast.xml", baseNoteImgFast.tex, baseNoteImgFast, noteSubsFast);
+    }
+
+    colorWheelSheet = C2D_SpriteSheetLoad("romfs:/preload/images/menus/colorWheel.t3x");
+    if (colorWheelSheet) {
+        colorWheel = C2D_SpriteSheetGetImage(colorWheelSheet, 0);
+        if (colorWheel.tex) C3D_TexSetFilter(colorWheel.tex, GPU_LINEAR, GPU_LINEAR);
+    }
+
+    copyPasteSheet = C2D_SpriteSheetLoad("romfs:/preload/images/menus/copypaste.t3x");
+    if (copyPasteSheet) {
+        C2D_Image baseImg = C2D_SpriteSheetGetImage(copyPasteSheet, 0);
+        if (baseImg.tex) {
+            C3D_TexSetFilter(baseImg.tex, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST);
+            parseUiXml("romfs:/preload/images/menus/copypaste.xml", baseImg.tex, baseImg, copyBtnSprite, pasteBtnSprite);
+        }
     }
 
     // Load Button Prompt & Alphabet sheets
@@ -539,6 +646,8 @@ void OptionsMenuState::update(float dt) {
                         lerpSelected = 0.0f;
                     } else if (cat->action == "openNoteColorsMenu") {
                         menuState = STATE_NOTE_COLORS;
+                        if (colorNoteSelected == -1) colorNoteSelected = 0;
+                        rgbToHsv(ClientPrefs::noteColors[colorNoteSelected][0], ClientPrefs::noteColors[colorNoteSelected][1], ClientPrefs::noteColors[colorNoteSelected][2], currentHue, currentSat, currentVal);
                         curSelected = 0;
                         lerpSelected = 0.0f;
                     } else if (cat->action == "resetToDefaults") {
@@ -738,32 +847,104 @@ void OptionsMenuState::update(float dt) {
         if (keyJustPressed(KEY_B)) {
             AudioEngine::playSound("romfs:/preload/sounds/cancelMenu.ogg", 0.7f);
             OptionManager::get().saveValues();
+            ClientPrefs::saveSettings();
             menuState = STATE_MAIN; curSelected = 0; lerpSelected = 0.0f;
             return;
         }
+        
         if (kDown & (KEY_DLEFT | KEY_CPAD_LEFT)) {
             colorNoteSelected--;
             if (colorNoteSelected < 0) colorNoteSelected = 3;
             AudioEngine::playSound("romfs:/preload/sounds/scrollMenu.ogg", 0.7f);
+            rgbToHsv(ClientPrefs::noteColors[colorNoteSelected][0], ClientPrefs::noteColors[colorNoteSelected][1], ClientPrefs::noteColors[colorNoteSelected][2], currentHue, currentSat, currentVal);
         }
         if (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) {
             colorNoteSelected++;
             if (colorNoteSelected > 3) colorNoteSelected = 0;
             AudioEngine::playSound("romfs:/preload/sounds/scrollMenu.ogg", 0.7f);
+            rgbToHsv(ClientPrefs::noteColors[colorNoteSelected][0], ClientPrefs::noteColors[colorNoteSelected][1], ClientPrefs::noteColors[colorNoteSelected][2], currentHue, currentSat, currentVal);
         }
 
+        // Reset to default
+        if (keyJustPressed(KEY_X) || keyJustPressed(KEY_Y)) {
+            static const unsigned char FAST_COLORS[4][3] = {
+                {0xC2, 0x4B, 0x99}, {0x00, 0xFF, 0xFF}, {0x12, 0xFA, 0x05}, {0xF9, 0x39, 0x3F}
+            };
+            ClientPrefs::noteColors[colorNoteSelected][0] = FAST_COLORS[colorNoteSelected][0];
+            ClientPrefs::noteColors[colorNoteSelected][1] = FAST_COLORS[colorNoteSelected][1];
+            ClientPrefs::noteColors[colorNoteSelected][2] = FAST_COLORS[colorNoteSelected][2];
+            rgbToHsv(ClientPrefs::noteColors[colorNoteSelected][0], ClientPrefs::noteColors[colorNoteSelected][1], ClientPrefs::noteColors[colorNoteSelected][2], currentHue, currentSat, currentVal);
+            AudioEngine::playSound("romfs:/preload/sounds/confirmMenu.ogg", 0.7f);
+        }
+        
         u32 kHeld = hidKeysHeld();
+        u32 kDownTouch = hidKeysDown();
+        if (kDownTouch & KEY_TOUCH) {
+            touchPosition touch;
+            hidTouchRead(&touch);
+            
+            // Copy button: x=262, copyY = cy - totalBtnH/2 = 120 - 55.4 ≈ 65, h=50.4
+            if (touch.px >= 262 && touch.px <= 309 && touch.py >= 65 && touch.py <= 115) {
+                copiedColor[0] = ClientPrefs::noteColors[colorNoteSelected][0];
+                copiedColor[1] = ClientPrefs::noteColors[colorNoteSelected][1];
+                copiedColor[2] = ClientPrefs::noteColors[colorNoteSelected][2];
+                hasCopiedColor = true;
+                AudioEngine::playSound("romfs:/preload/sounds/confirmMenu.ogg", 0.7f);
+            }
+            // Paste button: pasteY = 65 + 50.4 + 10 ≈ 125, h=50.4
+            else if (touch.px >= 262 && touch.px <= 309 && touch.py >= 125 && touch.py <= 175) {
+                if (hasCopiedColor) {
+                    ClientPrefs::noteColors[colorNoteSelected][0] = copiedColor[0];
+                    ClientPrefs::noteColors[colorNoteSelected][1] = copiedColor[1];
+                    ClientPrefs::noteColors[colorNoteSelected][2] = copiedColor[2];
+                    rgbToHsv(copiedColor[0], copiedColor[1], copiedColor[2], currentHue, currentSat, currentVal);
+                    AudioEngine::playSound("romfs:/preload/sounds/confirmMenu.ogg", 0.7f);
+                } else {
+                    AudioEngine::playSound("romfs:/preload/sounds/cancelMenu.ogg", 0.7f);
+                }
+            }
+        }
+
         if (kHeld & KEY_TOUCH) {
             touchPosition touch;
             hidTouchRead(&touch);
-            if (touch.px >= 20 && touch.px <= 300 && touch.py >= 40 && touch.py <= 160) {
-                float h = ((float)(touch.px - 20) / 280.0f) * 360.0f;
-                float s = (float)(touch.py - 40) / 120.0f;
-                float v = 1.0f;
-                hsvToRgb(h, s, v,
-                         ClientPrefs::noteColors[colorNoteSelected][0],
-                         ClientPrefs::noteColors[colorNoteSelected][1],
-                         ClientPrefs::noteColors[colorNoteSelected][2]);
+            
+            float wheelScale = 0.55f;
+            float cwWidth = (colorWheel.subtex ? colorWheel.subtex->width : 200.0f) * wheelScale;
+            float cwHeight = (colorWheel.subtex ? colorWheel.subtex->height : 200.0f) * wheelScale;
+            float radius = std::min(cwWidth, cwHeight) / 2.0f;
+            float cx = 150.0f;
+            float cy = 120.0f;
+            
+            float dx = touch.px - cx;
+            float dy = touch.py - cy;
+            float dist = sqrt(dx*dx + dy*dy);
+            
+            if (dist <= radius) {
+                float angle = atan2(dy, dx) * 180.0f / M_PI;
+                float hue = angle - 270.0f;
+                while (hue < 0.0f) hue += 360.0f;
+                while (hue >= 360.0f) hue -= 360.0f;
+                currentHue = hue;
+                currentSat = std::min(1.0f, dist / radius);
+                
+                unsigned char r, g, b;
+                hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
+                ClientPrefs::noteColors[colorNoteSelected][0] = r;
+                ClientPrefs::noteColors[colorNoteSelected][1] = g;
+                ClientPrefs::noteColors[colorNoteSelected][2] = b;
+            } 
+            // Brightness bar: x=18, w=20, y=30 to 210
+            else if (touch.px >= 18 && touch.px <= 38 && touch.py >= 30 && touch.py <= 210) {
+                currentVal = 1.0f - ((touch.py - 30.0f) / 180.0f);
+                if (currentVal < 0.0f) currentVal = 0.0f;
+                if (currentVal > 1.0f) currentVal = 1.0f;
+                
+                unsigned char r, g, b;
+                hsvToRgb(currentHue, currentSat, currentVal, r, g, b);
+                ClientPrefs::noteColors[colorNoteSelected][0] = r;
+                ClientPrefs::noteColors[colorNoteSelected][1] = g;
+                ClientPrefs::noteColors[colorNoteSelected][2] = b;
             }
         }
     }
@@ -776,6 +957,21 @@ void OptionsMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
     C2D_SceneBegin(top);
     C2D_TargetClear(top, C2D_Color32(123, 92, 224, 255));
     drawBG(topBG, bgSheet != nullptr, 400.0f, 240.0f);
+
+    // Grid overlay for controls and note colors
+    if (menuState == STATE_CONTROLS || menuState == STATE_NOTE_COLORS) {
+        float gsize = 40.0f;
+        float goff = gridOffset;
+        for (float gx = -gsize * 2.0f + goff; gx < 400.0f + gsize; gx += gsize) {
+            for (float gy = -gsize * 2.0f + goff; gy < 240.0f + gsize; gy += gsize) {
+                int xi = (int)std::round((gx - goff) / gsize);
+                int yi = (int)std::round((gy - goff) / gsize);
+                if ((xi + yi) % 2 == 0) {
+                    C2D_DrawRectSolid(gx, gy, 0.15f, gsize, gsize, C2D_Color32(255, 255, 255, 45));
+                }
+            }
+        }
+    }
 
     std::string headerText = "Options";
     if (menuState == STATE_CATEGORY) {
@@ -815,22 +1011,77 @@ void OptionsMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
         }
     }
     else if (menuState == STATE_NOTE_COLORS) {
-        static const char* noteNames[] = {"Left","Down","Up","Right"};
-        float startX = 40.0f;
-        float step   = 85.0f;
-        float noteY  = 120.0f;
-        float sc     = 1.0f;
-        bool fast    = ClientPrefs::fastNotes;
-
-        float lerpNx = startX + lerpColorNoteSelected * step;
-        C2D_DrawRectSolid(lerpNx - 10, noteY - 10, 0.14f, 84, 130, C2D_Color32(255,255,255,60));
-
+        // Draw the 4 notes (Left, Down, Up, Right)
+        float totalWidth = 4 * 80.0f;
+        float startX = (400.0f - totalWidth) / 2.0f;
+        float noteY = 80.0f;
+        
+        static const float baseScale = 0.65f;
+        
         for (int i = 0; i < 4; i++) {
-            float nx = startX + i * step;
-            u32 labelColor = (i == colorNoteSelected) ? CYellow : 0xFFFFFFFF;
-            Alphabet::draw(noteNames[i], nx + 32.0f, noteY - 18.0f, 0.75f, 1.0f, true, labelColor);
-            drawNoteSprite(i, nx, noteY, sc, fast);
+            float xPos = startX + i * 80.0f;
+            float scale = baseScale;
+            float alpha = 0.6f;
+            
+            if (i == colorNoteSelected) {
+                scale = baseScale * 1.15f;
+                alpha = 1.0f;
+                // Center the selection rect around the note
+                float noteW = (noteSubsNormal.size() > (size_t)(i*6+1) && noteSubsNormal[i*6+1].w > 0)
+                    ? (noteSubsNormal[i*6+1].rotated ? noteSubsNormal[i*6+1].h : noteSubsNormal[i*6+1].w) * scale
+                    : 80.0f * scale;
+                float noteH = (noteSubsNormal.size() > (size_t)(i*6+1) && noteSubsNormal[i*6+1].h > 0)
+                    ? (noteSubsNormal[i*6+1].rotated ? noteSubsNormal[i*6+1].w : noteSubsNormal[i*6+1].h) * scale
+                    : 80.0f * scale;
+                float noteCX = xPos + 40.0f;
+                float noteCY = noteY + 40.0f;
+                float pad = 8.0f;
+                C2D_DrawRectSolid(noteCX - noteW/2.0f - pad, noteCY - noteH/2.0f - pad,
+                    0.4f, noteW + pad*2, noteH + pad*2, C2D_Color32(255, 255, 255, 100));
+            }
+            
+            int noteIdx = i * 6 + 1;
+            if (noteIdx < (int)noteSubsNormal.size()) {
+                NoteSprite noteSprite = noteSubsNormal[noteIdx];
+                float cx = xPos + 40.0f;
+                float cy = noteY + 40.0f;
+                float drawX = cx - (noteSprite.rotated ? noteSprite.h : noteSprite.w) * scale * 0.5f;
+                float drawY = cy - (noteSprite.rotated ? noteSprite.w : noteSprite.h) * scale * 0.5f;
+                
+                unsigned char r = ClientPrefs::noteColors[i][0];
+                unsigned char g = ClientPrefs::noteColors[i][1];
+                unsigned char b = ClientPrefs::noteColors[i][2];
+                C2D_ImageTint noteTint;
+                C2D_PlainImageTint(&noteTint, C2D_Color32(r, g, b, 255), alpha);
+
+                C2D_SetTintMode(C2D_TintMult);
+                renderNoteSprite(noteSprite, drawX, drawY, 0.5f, &noteTint, scale, scale);
+                C2D_SetTintMode(C2D_TintSolid);
+            }
         }
+
+        // Hex label using Alphabet (top of screen) — colored with the current note color
+        char buf[32];
+        snprintf(buf, sizeof(buf), "HEX: %02X%02X%02X",
+            ClientPrefs::noteColors[colorNoteSelected][0],
+            ClientPrefs::noteColors[colorNoteSelected][1],
+            ClientPrefs::noteColors[colorNoteSelected][2]);
+        float hexScale = 1.0f;
+        u32 hexColor = C2D_Color32(
+            ClientPrefs::noteColors[colorNoteSelected][0],
+            ClientPrefs::noteColors[colorNoteSelected][1],
+            ClientPrefs::noteColors[colorNoteSelected][2],
+            255);
+        Alphabet::draw(buf, 200.0f, 15.0f, hexScale, 1.0f, true, hexColor);
+
+        // Note name at the bottom of the top screen
+        static const char* noteNameLabels[] = {"LEFT NOTE", "DOWN NOTE", "UP NOTE", "RIGHT NOTE"};
+        std::string noteLabel = noteNameLabels[colorNoteSelected];
+        float labelScale = 1.5f;
+        float labelW = Alphabet::getTextWidth(noteLabel, labelScale);
+        float maxLabelW = 370.0f;
+        if (labelW > maxLabelW) labelScale *= (maxLabelW / labelW);
+        Alphabet::draw(noteLabel, 200.0f, 195.0f, labelScale, 0.85f, true);
     }
 
     if (menuState != STATE_NOTE_COLORS) {
@@ -963,6 +1214,7 @@ void OptionsMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
         }
     }
     else if (menuState == STATE_NOTE_COLORS) {
+        // Draw grid overlay (bottom screen)
         float size = 40.0f;
         float offset = gridOffset;
         for (float x = -size * 2.0f + offset; x < 320.0f + size; x += size) {
@@ -975,22 +1227,86 @@ void OptionsMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
             }
         }
 
-        C2D_DrawRectSolid(20, 40, 0.14f, 280, 120, C2D_Color32(20, 20, 20, 200));
-        for (int h = 0; h < 280; h += 4) {
-            float hue = ((float)h / 280.0f) * 360.0f;
-            unsigned char r, g, b;
-            hsvToRgb(hue, 1.0f, 1.0f, r, g, b);
-            C2D_DrawRectSolid(20 + h, 40, 0.15f, 4, 120, C2D_Color32(r, g, b, 255));
+        // Draw dark semi-transparent panel background
+        C2D_DrawRectSolid(10, 15, 0.2f, 300, 210, C2D_Color32(0, 0, 0, 100));
+
+        // Layout constants:
+        // Brightness bar: x=18, w=20 → right edge x=38
+        // Copy/Paste buttons sprite w = 64 * 0.7 = 44.8 → placed at x=262 → left edge x=262
+        // Usable center zone: 38 to 262 → center = 38 + (262-38)/2 = 38 + 112 = 150
+        // Wheel at scale 0.55: approx radius 55 → cx=150, cy=120
+        // Buttons: copyH=50.4, pasteH=50.4, gap=10 → total=110.8 → startY = 120 - 55.4 = 64.6
+
+        // --- Brightness bar ---
+        for (int y = 0; y < 180; y++) {
+            float val = 1.0f - (y / 180.0f);
+            unsigned char rr, gg, bb;
+            hsvToRgb(currentHue, currentSat, val, rr, gg, bb);
+            C2D_DrawRectSolid(18, 30 + y, 0.5f, 20, 1, C2D_Color32(rr, gg, bb, 255));
+        }
+        float sliderSelY = 30 + (1.0f - currentVal) * 180.0f;
+        C2D_DrawRectSolid(16, sliderSelY - 2, 0.6f, 24, 4, C2D_Color32(255, 255, 255, 255));
+
+        // --- Color wheel (centered between bar right=38 and btn left=262) ---
+        float cx = 150.0f;
+        float cy = 120.0f;
+        float wheelScale = 0.55f;
+        float cwWidth  = (colorWheel.subtex ? colorWheel.subtex->width  : 200.0f) * wheelScale;
+        float cwHeight = (colorWheel.subtex ? colorWheel.subtex->height : 200.0f) * wheelScale;
+        float radius = std::min(cwWidth, cwHeight) / 2.0f;
+
+        if (colorWheel.tex) {
+            C2D_ImageTint valTint;
+            C2D_PlainImageTint(&valTint, C2D_Color32(0, 0, 0, 255), 1.0f - currentVal);
+            C2D_DrawImageAt(colorWheel, cx - cwWidth/2, cy - cwHeight/2, 0.5f, &valTint, wheelScale, wheelScale);
         }
 
-        AddTextCentered("Touch palette to pick color", 160, 180, 0.35f, 1.0f, CWhite, 300.0f);
+        float selAngleRad = (currentHue + 270.0f) * M_PI / 180.0f;
+        float selDist = currentSat * radius;
+        float selX = cx + selDist * cos(selAngleRad);
+        float selY = cy + selDist * sin(selAngleRad);
+        C2D_DrawRectSolid(selX - 3, selY - 3, 0.6f, 6, 6, C2D_Color32(255, 255, 255, 255));
+
+        // --- Copy/Paste buttons (vertically centered on right side, x=262) ---
+        // copyH = 72 * 0.7 = 50.4; pasteH = 72 * 0.7 = 50.4; gap = 10
+        // totalH = 50.4 + 10 + 50.4 = 110.8 → startY = cy - totalH/2 = 120 - 55.4 = 64.6
+        float btnX    = 255.0f;
+        float btnScale = 0.7f;
+        float copyH   = 72.0f * btnScale;   // 50.4
+        float pasteH  = 72.0f * btnScale;   // 50.4
+        float btnGap  = 10.0f;
+        float totalBtnH = copyH + btnGap + pasteH;
+        float copyY   = cy - totalBtnH / 2.0f;
+        float pasteY  = copyY + copyH + btnGap;
+
+        if (copyBtnSprite.tex) {
+            C2D_Image img;
+            img.tex = copyBtnSprite.tex;
+            img.subtex = &copyBtnSprite.sub;
+            C2D_DrawImageAt(img, btnX, copyY, 0.5f, nullptr, btnScale, btnScale);
+        }
+        if (pasteBtnSprite.tex) {
+            C2D_Image img;
+            img.tex = pasteBtnSprite.tex;
+            img.subtex = &pasteBtnSprite.sub;
+            C2D_ImageTint tint;
+            C2D_ImageTint* tintPtr = nullptr;
+            if (!hasCopiedColor) {
+                C2D_AlphaImageTint(&tint, 0.4f);
+                tintPtr = &tint;
+            }
+            C2D_DrawImageAt(img, btnX, pasteY, 0.5f, tintPtr, btnScale, btnScale);
+        }
     }
 }
 
 void OptionsMenuState::exitState() {
     OptionManager::get().saveValues();
+    ClientPrefs::saveSettings();
     if (bgSheet) C2D_SpriteSheetFree(bgSheet);
     if (bottomBGSheet) C2D_SpriteSheetFree(bottomBGSheet);
     if (noteSheetNormal) C2D_SpriteSheetFree(noteSheetNormal);
     if (noteSheetFast) C2D_SpriteSheetFree(noteSheetFast);
+    if (colorWheelSheet) C2D_SpriteSheetFree(colorWheelSheet);
+    if (copyPasteSheet) C2D_SpriteSheetFree(copyPasteSheet);
 }

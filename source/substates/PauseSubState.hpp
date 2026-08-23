@@ -24,6 +24,7 @@ public:
     PauseMenuState pauseMenuState = PAUSE_MAIN;
 
     std::vector<std::string> pauseMenuItems;
+    class MemoryDebugState* memoryDebugState = nullptr;
     
 private:
     void setupPauseMenu(const std::vector<std::string>& items, const std::string& title = "PAUSED");
