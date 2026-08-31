@@ -4,27 +4,14 @@
 #include "VideoState.hpp"
 #include "../backend/ModHandler.hpp"
 #include "../backend/AudioEngine.hpp"
-#include "../objects/ButtonPrompt.hpp"
+#include "../backend/Paths.hpp"
 #include <cmath>
 #include <sstream>
 #include <algorithm>
+#include <3ds.h>
 
 static std::string lastDifficultyName = "Normal";
 
-static void enforceLRUCache(std::unordered_map<std::string, StoryMenuState::StoryCacheEntry>& cache, size_t maxSize) {
-    if (cache.size() > maxSize) {
-        auto oldest = cache.begin();
-        for (auto it = cache.begin(); it != cache.end(); ++it) {
-            if (it->second.lastAccessFrame < oldest->second.lastAccessFrame) {
-                oldest = it;
-            }
-        }
-        if (oldest->second.sheet) {
-            C2D_SpriteSheetFree(oldest->second.sheet);
-        }
-        cache.erase(oldest);
-    }
-}
 
 void StoryMenuState::init() {
     ModHandler::get().currentModFolder = "";
@@ -78,15 +65,51 @@ void StoryMenuState::init() {
             }
             return nullptr;
         };
-        arrowLeftFrame = getUIFrame("arrow left");
-        arrowPushLeftFrame = getUIFrame("arrow push left");
-        arrowRightFrame = getUIFrame("arrow right");
+        arrowLeftFrame      = getUIFrame("arrow left");
+        arrowPushLeftFrame  = getUIFrame("arrow push left");
+        arrowRightFrame     = getUIFrame("arrow right");
         arrowPushRightFrame = getUIFrame("arrow push right");
-        lockFrame = getUIFrame("lock");
+        lockFrame           = getUIFrame("lock");
     }
 
-    weekCache.clear();
-    diffCache.clear();
+    // TRACKS
+    if (tracksSheet) { C2D_SpriteSheetFree(tracksSheet); tracksSheet = nullptr; }
+    tracksSheet = C2D_SpriteSheetLoad("romfs:/preload/images/menus/Menu_Tracks.t3x");
+    if (tracksSheet) {
+        tracksImg = C2D_SpriteSheetGetImage(tracksSheet, 0);
+    } else {
+        tracksImg = {};
+    }
+
+    // Reset confirm animation
+    selectedWeek   = false;
+    confirmTimer   = 0.0f;
+    flickerTimer   = 0.0f;
+    flickerVisible = true;
+    pendingDiffSuffix.clear();
+    pendingIntroVideo.clear();
+    pendingIsMod    = false;
+    pendingModFolder.clear();
+
+    // ── Start background loading thread ──────────────────────────────────
+    lastSelectedCheck = -1;
+    lastDiffCheck     = -1;
+    loadingAngle      = 0.0f;
+    weekSheets.clear();
+    pendingWeekIndices.clear();
+    activeBgSheet   = nullptr;  activeBgName.clear();
+    activeDiffSheet = nullptr;  activeDiffName.clear();
+
+    LightLock_Init(&loadLock);
+    LightEvent_Init(&loadEvent, RESET_ONESHOT);
+    threadRunning = true;
+    s32 prio;
+    svcGetThreadPriority(&prio, CUR_THREAD_HANDLE);
+    loadThread = threadCreate(threadMain, this, 32 * 1024, prio + 1, -2, false);
+
+    triggerWindowLoad();
+    triggerDiffLoad();
+    // ─────────────────────────────────────────────────────────────────────
 }
 
 void StoryMenuState::updateDifficulties() {
@@ -129,7 +152,73 @@ void StoryMenuState::updateDifficulties() {
 }
 
 void StoryMenuState::update(float dt) {
-    cacheFrameCount++;
+    // ── Consume background-thread results ─────────────────────────────────
+    loadingAngle += dt * 3.14159f * 2.0f;
+
+    {
+        std::deque<LoadedResult> local;
+        LightLock_Lock(&loadLock);
+        local.swap(resultQueue);
+        LightLock_Unlock(&loadLock);
+
+        for (auto& res : local) {
+            if (!res.buffer) continue;
+            C2D_SpriteSheet s = C2D_SpriteSheetLoadFromMem(res.buffer, res.size);
+            linearFree(res.buffer);
+            if (!s) continue;
+
+            if (res.type == AsyncLoadRequest::WEEK_BANNER) {
+                // Free any old sheet at this slot
+                auto it = weekSheets.find(res.weekIndex);
+                if (it != weekSheets.end() && it->second) Paths_freeSpriteSheet(it->second);
+                weekSheets[res.weekIndex] = s;
+                C2D_Image img = C2D_SpriteSheetGetImage(s, 0);
+                if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+            } else if (res.type == AsyncLoadRequest::BACKGROUND) {
+                if (activeBgSheet) Paths_freeSpriteSheet(activeBgSheet);
+                activeBgSheet = s;
+                C2D_Image img = C2D_SpriteSheetGetImage(s, 0);
+                if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+            } else if (res.type == AsyncLoadRequest::DIFFICULTY) {
+                if (activeDiffSheet) Paths_freeSpriteSheet(activeDiffSheet);
+                activeDiffSheet = s;
+                C2D_Image img = C2D_SpriteSheetGetImage(s, 0);
+                if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+            }
+        }
+    }
+
+    // Trigger new loads when selection or difficulty changes
+    if (lastSelectedCheck != curSelected) {
+        lastSelectedCheck = curSelected;
+        triggerWindowLoad();
+    }
+    if (lastDiffCheck != curDifficulty) {
+        lastDiffCheck = curDifficulty;
+        triggerDiffLoad();
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    // Confirm animation update
+    if (selectedWeek) {
+        confirmTimer += dt;
+        flickerTimer += dt;
+        if (flickerTimer >= 0.06f) {
+            flickerTimer -= 0.06f;
+            flickerVisible = !flickerVisible;
+        }
+        if (confirmTimer >= 1.0f) {
+            if (!pendingIntroVideo.empty()) {
+                WeekData& data = WeekData::weeksLoaded[selectableWeeks[curSelected]];
+                switchState(new VideoState(pendingIntroVideo, new PlayState(data, 0, pendingDiffSuffix)));
+            } else {
+                WeekData& data = WeekData::weeksLoaded[selectableWeeks[curSelected]];
+                switchState(new PlayState(data, 0, pendingDiffSuffix));
+            }
+        }
+        return;
+    }
+
     u32 kDown = hidKeysDown();
     touchPosition touch;
     hidTouchRead(&touch);
@@ -170,28 +259,33 @@ void StoryMenuState::update(float dt) {
         }
 
         if (keyJustPressed(KEY_A | KEY_START)) {
-            AudioEngine::playSound("romfs:/preload/sounds/confirmMenu.ogg", 0.7f);
             std::string weekName = selectableWeeks[curSelected];
             WeekData& data = WeekData::weeksLoaded[weekName];
-            
+
             if (!data.songs.empty()) {
                 std::string diff = curWeekDiffs[curDifficulty];
-                std::string suffix = "";
-                if (diff == "Easy") suffix = "easy";
-                else if (diff == "Hard") suffix = "hard";
+                pendingDiffSuffix = "";
+                if (diff == "Easy") pendingDiffSuffix = "easy";
+                else if (diff == "Hard") pendingDiffSuffix = "hard";
                 else if (diff != "Normal") {
-                    suffix = diff;
-                    std::transform(suffix.begin(), suffix.end(), suffix.begin(), ::tolower);
+                    pendingDiffSuffix = diff;
+                    std::transform(pendingDiffSuffix.begin(), pendingDiffSuffix.end(), pendingDiffSuffix.begin(), ::tolower);
                 }
+                pendingIsMod    = data.isMod;
+                pendingModFolder = data.isMod ? data.modFolder : "";
+                pendingIntroVideo = data.songs[0].introVideo;
+
                 if (data.isMod) {
                     ModHandler::get().currentModFolder = data.modFolder;
                 }
                 MusicPlayer::stop();
-                if (!data.songs[0].introVideo.empty()) {
-                    switchState(new VideoState(data.songs[0].introVideo, new PlayState(data, 0, suffix)));
-                } else {
-                    switchState(new PlayState(data, 0, suffix));
-                }
+
+                // confirm animation
+                AudioEngine::playSound("romfs:/preload/sounds/confirmMenu.ogg", 0.7f);
+                selectedWeek   = true;
+                confirmTimer   = 0.0f;
+                flickerTimer   = 0.0f;
+                flickerVisible = true;
             }
         }
     }
@@ -289,8 +383,8 @@ void StoryMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
         std::string storyText = data.storyName.empty() ? data.weekName : data.storyName;
         std::transform(storyText.begin(), storyText.end(), storyText.begin(), ::toupper);
         
-        AddText(storyText, 200, 12, 0.45f, true, 0.0f, CGray, 0.0f);
-        AddText("SCORE: 0", 200, 31, 0.45f, true, 0.0f, CWhite, 0.0f);
+        AddText(storyText, 200, 12, 0.45f, true, 0.0f, C2D_Color32(0xB2, 0xB2, 0xB2, 255), 0.0f);
+        AddText("LEVEL SCORE: 0", 200, 31, 0.45f, true, 0.0f, CWhite, 0.0f);
     }
  
     if (!selectableWeeks.empty()) {
@@ -330,9 +424,14 @@ void StoryMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
         std::string weekName = selectableWeeks[curSelected];
         WeekData& data = WeekData::weeksLoaded[weekName];
  
-        u32 tracksColor = C2D_Color32(200, 200, 200, 255);
-        AddText("TRACKS", 30, 30, 0.65f, false, 0.0f, tracksColor, 0.0f);
- 
+        u32 tracksColor = C2D_Color32(0xE5, 0x57, 0x77, 255);
+        // TRACKS
+        if (tracksImg.tex) {
+            drawImageScaled(tracksImg, 30.0f, 32.0f, 1.0f, 0.7f, 0.7f);
+        } else {
+            AddText("TRACKS", 30, 30, 0.65f, false, 0.0f, tracksColor, 0.0f);
+        }
+
         float songY = 70.0f;
         for (const auto& song : data.songs) {
             songY = drawWrappedText(song.name, 30, songY, 0.45f, 130.0f, tracksColor);
@@ -345,22 +444,25 @@ void StoryMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
             float dist = (i - lerpSelected);
             float itemY = listCenterY + dist * 50.0f;
             if (itemY < -60 || itemY > 300) continue;
- 
+
             bool isSelected = (i == curSelected);
             bool isLocked = !WeekData::weeksLoaded[selectableWeeks[i]].startUnlocked;
-            
+
+            // Flicker
+            if (selectedWeek && isSelected && !flickerVisible) continue;
+
             C2D_Image img = getWeekImage(selectableWeeks[i]);
             if (img.tex) {
                 float scale = isSelected ? 0.7f : 0.5f;
                 float imgW = img.subtex->width * scale;
                 float imgH = img.subtex->height * scale;
-                
+
                 C2D_ImageTint tint;
                 C2D_ImageTint* tintPtr = &tint;
                 if (isLocked) {
                     C2D_PlainImageTint(&tint, C2D_Color32(50, 50, 50, 255), 1.0f);
                 } else if (!isSelected) {
-                    C2D_PlainImageTint(&tint, C2D_Color32(180, 180, 180, 255), 1.0f);
+                    C2D_AlphaImageTint(&tint, 0.6f);
                 } else {
                     if (img.tex && (img.tex->fmt == GPU_A8 || img.tex->fmt == GPU_A4)) {
                         C2D_PlainImageTint(&tint, C2D_Color32(255, 255, 255, 255), 1.0f);
@@ -368,21 +470,22 @@ void StoryMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
                         C2D_AlphaImageTint(&tint, 1.0f);
                     }
                 }
- 
+
                 drawImageScaledTinted(img, listX - (imgW / 2.0f), itemY - (imgH / 2.0f), 0.5f, scale, scale, tintPtr);
-                
+
                 if (isLocked && lockFrame && lockFrame->tex) {
                     float lW = frameLogicalW(*lockFrame) * scale;
                     float lH = frameLogicalH(*lockFrame) * scale;
                     drawFrameAt(*lockFrame, listX - (lW / 2.0f), itemY - (lH / 2.0f), 0.51f, nullptr, scale, scale);
                 }
             } else {
+                u32 textCol = isSelected ? CWhite : C2D_Color32(110, 110, 110, 154); // 154 ≈ 0.6*255
                 std::string weekDisplayName = WeekData::weeksLoaded[selectableWeeks[i]].weekName;
-                AddText(weekDisplayName, listX, itemY, isSelected ? 0.65f : 0.45f, true, isSelected ? 2.0f : 0.0f, isSelected ? CWhite : C2D_Color32(110, 110, 110, 255), 0.0f);
+                AddText(weekDisplayName, listX, itemY, isSelected ? 0.65f : 0.45f, true, isSelected ? 2.0f : 0.0f, textCol, 0.0f);
             }
         }
+
     }
-    ButtonPrompt::drawPrompt("b", "Back", 8.0f, 205.0f, 0.70f, 1.0f);
 }
 
 
@@ -418,108 +521,245 @@ float StoryMenuState::drawWrappedText(const std::string& text, float x, float y,
 }
 
 void StoryMenuState::exitState() {
-    for (auto const& pair : weekCache) { if(pair.second.sheet) C2D_SpriteSheetFree(pair.second.sheet); }
-    for (auto const& pair : diffCache) { if(pair.second.sheet) C2D_SpriteSheetFree(pair.second.sheet); }
-    if (uiSheet) C2D_SpriteSheetFree(uiSheet);
-    if (backgroundSheet) C2D_SpriteSheetFree(backgroundSheet);
-    backgroundSheet = nullptr;
+    // Stop background thread
+    threadRunning = false;
+    LightEvent_Signal(&loadEvent);
+    if (loadThread) {
+        threadJoin(loadThread, U64_MAX);
+        threadFree(loadThread);
+        loadThread = nullptr;
+    }
 
-    weekCache.clear();
-    diffCache.clear();
-    
+    // Free any unconsumed raw buffers in the result queue
+    LightLock_Lock(&loadLock);
+    for (auto& r : resultQueue) if (r.buffer) linearFree(r.buffer);
+    resultQueue.clear();
+    LightLock_Unlock(&loadLock);
+
+    // Free sliding-window week sheets
+    for (auto& p : weekSheets) if (p.second) Paths_freeSpriteSheet(p.second);
+    weekSheets.clear();
+    if (activeBgSheet)   { Paths_freeSpriteSheet(activeBgSheet);   activeBgSheet   = nullptr; }
+    if (activeDiffSheet) { Paths_freeSpriteSheet(activeDiffSheet); activeDiffSheet = nullptr; }
+
+    if (uiSheet)     C2D_SpriteSheetFree(uiSheet);
+    if (tracksSheet) { C2D_SpriteSheetFree(tracksSheet); tracksSheet = nullptr; }
+
     C2D_TextBufDelete(vcrFontBuf);
 }
 
+// ── Simplified getters: return from cache; draw() shows spinner if null ────
+
 C2D_Image StoryMenuState::getWeekBackgroundImage(const std::string& name) {
-    if (!selectableWeeks.empty() && curSelected >= 0 && curSelected < (int)selectableWeeks.size()) {
-        WeekData& data = WeekData::weeksLoaded[selectableWeeks[curSelected]];
-        ModHandler::get().currentModFolder = data.isMod ? data.modFolder : "";
-    } else {
-        ModHandler::get().currentModFolder = "";
-    }
-
-    if (backgroundSheet && currentBackground == name) return C2D_SpriteSheetGetImage(backgroundSheet, 0);
-    
-    if (backgroundSheet) {
-        C2D_SpriteSheetFree(backgroundSheet);
-        backgroundSheet = nullptr;
-    }
-
-    std::string path = Paths::image("menubackgrounds/" + name);
-    if (!Paths::fileExists(path)) {
-        path = Paths::image("menubackgrounds/placeholder");
-    }
-
-    if (Paths::fileExists(path)) {
-        backgroundSheet = C2D_SpriteSheetLoad(path.c_str());
-        if (backgroundSheet) {
-            currentBackground = name;
-            C2D_Image img = C2D_SpriteSheetGetImage(backgroundSheet, 0);
-            if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
-            return img;
-        }
-    }
+    if (name == activeBgName && activeBgSheet)
+        return C2D_SpriteSheetGetImage(activeBgSheet, 0);
     return {nullptr, nullptr};
 }
 
 C2D_Image StoryMenuState::getWeekImage(const std::string& name) {
-    if (WeekData::weeksLoaded.count(name)) {
-        WeekData& data = WeekData::weeksLoaded[name];
-        ModHandler::get().currentModFolder = data.isMod ? data.modFolder : "";
-    } else {
-        ModHandler::get().currentModFolder = "";
-    }
-
-    if (weekCache.count(name)) {
-        weekCache[name].lastAccessFrame = cacheFrameCount;
-        return C2D_SpriteSheetGetImage(weekCache[name].sheet, 0);
-    }
-
-    std::string path = Paths::image("storymenu/" + name);
-    if (!Paths::fileExists(path)) {
-        path = Paths::image("storymenu/placeholder");
-    }
-    if (Paths::fileExists(path)) {
-        C2D_SpriteSheet s = C2D_SpriteSheetLoad(path.c_str());
-        if (s) {
-            C2D_Image img = C2D_SpriteSheetGetImage(s, 0);
-            if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
-            
-            enforceLRUCache(weekCache, MAX_CACHE);
-            weekCache[name] = {s, cacheFrameCount};
-            return img;
+    for (int i = 0; i < (int)selectableWeeks.size(); i++) {
+        if (selectableWeeks[i] == name) {
+            auto it = weekSheets.find(i);
+            if (it != weekSheets.end() && it->second)
+                return C2D_SpriteSheetGetImage(it->second, 0);
+            break;
         }
     }
     return {nullptr, nullptr};
 }
 
 C2D_Image StoryMenuState::getDiffImage(const std::string& name) {
-    if (!selectableWeeks.empty() && curSelected >= 0 && curSelected < (int)selectableWeeks.size()) {
-        WeekData& data = WeekData::weeksLoaded[selectableWeeks[curSelected]];
-        ModHandler::get().currentModFolder = data.isMod ? data.modFolder : "";
-    } else {
-        ModHandler::get().currentModFolder = "";
-    }
+    if (name == activeDiffName && activeDiffSheet)
+        return C2D_SpriteSheetGetImage(activeDiffSheet, 0);
+    return {nullptr, nullptr};
+}
 
-    if (diffCache.count(name)) {
-        diffCache[name].lastAccessFrame = cacheFrameCount;
-        return C2D_SpriteSheetGetImage(diffCache[name].sheet, 0);
-    }
+// ── Background thread ──────────────────────────────────────────────────────
 
-    std::string path = Paths::image("menudifficulties/" + name);
-    if (!Paths::fileExists(path)) {
-        path = Paths::image("menudifficulties/placeholder");
+void StoryMenuState::threadMain(void* arg) {
+    StoryMenuState* state = (StoryMenuState*)arg;
+    while (state->threadRunning) {
+        LightLock_Lock(&state->loadLock);
+        if (state->requestQueue.empty()) {
+            LightLock_Unlock(&state->loadLock);
+            LightEvent_Wait(&state->loadEvent);
+            continue;
+        }
+        AsyncLoadRequest req = state->requestQueue.front();
+        state->requestQueue.pop_front();
+        LightLock_Unlock(&state->loadLock);
+
+        // fread with the pre-resolved path (safe from secondary thread)
+        LoadedResult result;
+        result.type      = req.type;
+        result.weekIndex = req.weekIndex;
+
+        FILE* f = fopen(req.resolvedPath.c_str(), "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            size_t size = (size_t)ftell(f);
+            fseek(f, 0, SEEK_SET);
+            void* buf = linearAlloc(size);
+            if (buf) {
+                if (fread(buf, 1, size, f) == size) {
+                    GSPGPU_FlushDataCache(buf, size);
+                    result.buffer = buf;
+                    result.size   = size;
+                } else {
+                    linearFree(buf);
+                }
+            }
+            fclose(f);
+        }
+
+        LightLock_Lock(&state->loadLock);
+        state->resultQueue.push_back(result);
+        if (req.type == AsyncLoadRequest::WEEK_BANNER)
+            state->pendingWeekIndices.erase(req.weekIndex);
+        LightLock_Unlock(&state->loadLock);
+
+        // Small yield between items so we don't starve the main thread
+        svcSleepThread(500000LL); // 0.5 ms
     }
-    if (Paths::fileExists(path)) {
-        C2D_SpriteSheet s = C2D_SpriteSheetLoad(path.c_str());
-        if (s) {
-            C2D_Image img = C2D_SpriteSheetGetImage(s, 0);
-            if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
-            
-            enforceLRUCache(diffCache, MAX_CACHE);
-            diffCache[name] = {s, cacheFrameCount};
-            return img;
+}
+
+// ── triggerWindowLoad: sliding window ±3 week banners + background ─────────
+
+void StoryMenuState::triggerWindowLoad() {
+    int n = (int)selectableWeeks.size();
+    if (n == 0) return;
+
+    // 1. Compute desired window
+    int lo = std::max(0, curSelected - 3);
+    int hi = std::min(n - 1, curSelected + 3);
+
+    // 2. Free sheets outside the window
+    std::vector<int> toErase;
+    for (auto& p : weekSheets) {
+        if (p.first < lo || p.first > hi) {
+            if (p.second) Paths_freeSpriteSheet(p.second);
+            toErase.push_back(p.first);
         }
     }
-    return {nullptr, nullptr};
+    for (int idx : toErase) weekSheets.erase(idx);
+
+    // 3. Cancel queued week-banner requests outside window
+    LightLock_Lock(&loadLock);
+    requestQueue.erase(
+        std::remove_if(requestQueue.begin(), requestQueue.end(),
+            [&](const AsyncLoadRequest& r) {
+                return r.type == AsyncLoadRequest::WEEK_BANNER &&
+                       (r.weekIndex < lo || r.weekIndex > hi);
+            }),
+        requestQueue.end());
+    // Rebuild pendingWeekIndices from what remains
+    pendingWeekIndices.clear();
+    for (auto& r : requestQueue)
+        if (r.type == AsyncLoadRequest::WEEK_BANNER)
+            pendingWeekIndices.insert(r.weekIndex);
+    LightLock_Unlock(&loadLock);
+
+    // 4. Queue background if week changed
+    {
+        std::string bgName;
+        if (curSelected >= 0 && curSelected < n) {
+            WeekData& wd = WeekData::weeksLoaded[selectableWeeks[curSelected]];
+            ModHandler::get().currentModFolder = wd.isMod ? wd.modFolder : "";
+            bgName = wd.weekBackground;
+        }
+        ModHandler::get().currentModFolder = "";
+
+        if (bgName != activeBgName) {
+            activeBgName = bgName;
+            if (activeBgSheet) { Paths_freeSpriteSheet(activeBgSheet); activeBgSheet = nullptr; }
+            if (!bgName.empty()) {
+                std::string p = Paths::image("menubackgrounds/" + bgName);
+                if (!Paths::fileExists(p)) p = Paths::image("menubackgrounds/placeholder");
+                if (Paths::fileExists(p)) {
+                    AsyncLoadRequest req;
+                    req.type         = AsyncLoadRequest::BACKGROUND;
+                    req.resolvedPath = p;
+                    // Cancel previous bg request and push new one at front (high priority)
+                    LightLock_Lock(&loadLock);
+                    requestQueue.erase(
+                        std::remove_if(requestQueue.begin(), requestQueue.end(),
+                            [](const AsyncLoadRequest& r){ return r.type == AsyncLoadRequest::BACKGROUND; }),
+                        requestQueue.end());
+                    requestQueue.push_front(req);
+                    LightLock_Unlock(&loadLock);
+                }
+            }
+        }
+    }
+
+    // 5. Queue week banners in priority order: sel, sel-1, sel+1, sel-2, sel+2, sel-3, sel+3
+    std::vector<int> order;
+    order.push_back(curSelected);
+    for (int delta = 1; delta <= 3; delta++) {
+        if (curSelected - delta >= lo) order.push_back(curSelected - delta);
+        if (curSelected + delta <= hi) order.push_back(curSelected + delta);
+    }
+
+    bool queued = false;
+    LightLock_Lock(&loadLock);
+    for (int idx : order) {
+        if (weekSheets.count(idx) || pendingWeekIndices.count(idx)) continue;
+        const std::string& weekName = selectableWeeks[idx];
+        WeekData& wd = WeekData::weeksLoaded[weekName];
+        ModHandler::get().currentModFolder = wd.isMod ? wd.modFolder : "";
+        std::string p = Paths::image("storymenu/" + weekName);
+        if (!Paths::fileExists(p)) p = Paths::image("storymenu/placeholder");
+        ModHandler::get().currentModFolder = "";
+        if (Paths::fileExists(p)) {
+            AsyncLoadRequest req;
+            req.type         = AsyncLoadRequest::WEEK_BANNER;
+            req.weekIndex    = idx;
+            req.resolvedPath = p;
+            requestQueue.push_back(req);
+            pendingWeekIndices.insert(idx);
+            queued = true;
+        }
+    }
+    LightLock_Unlock(&loadLock);
+
+    if (queued) LightEvent_Signal(&loadEvent);
+}
+
+// ── triggerDiffLoad: load difficulty sprite for current week ───────────────
+
+void StoryMenuState::triggerDiffLoad() {
+    if (curWeekDiffs.empty()) return;
+
+    std::string diffStr = curWeekDiffs[curDifficulty];
+    std::string lower = diffStr;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    if (lower == activeDiffName) return;
+
+    activeDiffName = lower;
+    if (activeDiffSheet) { Paths_freeSpriteSheet(activeDiffSheet); activeDiffSheet = nullptr; }
+
+    // Resolve path on main thread (opendir is not safe from worker)
+    int n = (int)selectableWeeks.size();
+    if (n > 0 && curSelected >= 0 && curSelected < n) {
+        WeekData& wd = WeekData::weeksLoaded[selectableWeeks[curSelected]];
+        ModHandler::get().currentModFolder = wd.isMod ? wd.modFolder : "";
+    }
+    std::string p = Paths::image("menudifficulties/" + lower);
+    if (!Paths::fileExists(p)) p = Paths::image("menudifficulties/placeholder");
+    ModHandler::get().currentModFolder = "";
+
+    if (Paths::fileExists(p)) {
+        AsyncLoadRequest req;
+        req.type         = AsyncLoadRequest::DIFFICULTY;
+        req.resolvedPath = p;
+        // Cancel previous diff request, push at front
+        LightLock_Lock(&loadLock);
+        requestQueue.erase(
+            std::remove_if(requestQueue.begin(), requestQueue.end(),
+                [](const AsyncLoadRequest& r){ return r.type == AsyncLoadRequest::DIFFICULTY; }),
+            requestQueue.end());
+        requestQueue.push_front(req);
+        LightLock_Unlock(&loadLock);
+        LightEvent_Signal(&loadEvent);
+    }
 }

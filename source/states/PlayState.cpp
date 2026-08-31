@@ -520,69 +520,76 @@ void PlayState::init() {
 
     arrowSkinScaleFactor = 1.0f;
     if (!ClientPrefs::fastNotes) {
-        auto* csNote = SpritesheetCache::get().load("shared/images/noteSkins/NOTE_assets");
-        noteSheet = csNote ? csNote->sheet : nullptr;
-
-        if (noteSheet) {
-            C2D_Image mainNoteImg = C2D_SpriteSheetGetImage(noteSheet, 0);
-            if (mainNoteImg.tex) C3D_TexSetFilter(mainNoteImg.tex, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST);
-            if (mainNoteImg.subtex == nullptr) {
-                 printf("\x1b[10;1HERROR: NOTE_assets subtex is NULL\n");
-                 return;
-            }
-            parseNoteXml(Paths::resolve("romfs:/shared/images/noteSkins/NOTE_assets.xml"), mainNoteImg.tex, mainNoteImg, noteSubtexs, &noteSubtexFrames);
-            float defaultArrowW = (noteSubtexs.size() > 1) ? noteSubtexs[0 * 6 + 1].w : 0.0f;
-            if (defaultArrowW > 0.0f) {
-                arrowSkinScaleFactor = 73.0f / defaultArrowW;
-            }
-        } else {
-            printf("\x1b[6;1HERROR: Could not load NOTE_assets\n");
-        }
+        bool hasCustomSkin = false;
+        std::string skinName = "";
+        std::string t3xPath = "";
+        std::string xmlPath = "";
 
         if (!SongParser::arrowSkin.empty()) {
-            const std::string& skinName = SongParser::arrowSkin;
+            skinName = SongParser::arrowSkin;
             std::string skinKey = "noteSkins/" + skinName;
-
-            std::string t3xPath = Paths::image(skinKey);          // handles mod + .rawtex + romfs
-            std::string xmlPath = Paths::xml(skinKey);             // handles mod + romfs
-
+            t3xPath = Paths::image(skinKey);
+            xmlPath = Paths::xml(skinKey);
             if (Paths::fileExists(t3xPath) && Paths::fileExists(xmlPath)) {
-                C2D_SpriteSheet skinSheet = C2D_SpriteSheetLoad(t3xPath.c_str());
-                if (skinSheet) {
-                    C2D_Image skinImg = C2D_SpriteSheetGetImage(skinSheet, 0);
-                    if (skinImg.tex && skinImg.subtex) {
+                hasCustomSkin = true;
+            }
+        }
 
-                        bool isPixelSkin =
-                            skinName.size() >= 6 &&
-                            skinName.compare(skinName.size() - 6, 6, "-pixel") == 0;
+        if (hasCustomSkin) {
+            C2D_SpriteSheet skinSheet = C2D_SpriteSheetLoad(t3xPath.c_str());
+            if (skinSheet) {
+                C2D_Image skinImg = C2D_SpriteSheetGetImage(skinSheet, 0);
+                if (skinImg.tex && skinImg.subtex) {
+                    bool isPixelSkin =
+                        skinName.size() >= 6 &&
+                        skinName.compare(skinName.size() - 6, 6, "-pixel") == 0;
 
-                        C3D_TexSetFilter(
-                            skinImg.tex,
-                            (ClientPrefs::globalAntialiasing && !isPixelSkin) ? GPU_LINEAR : GPU_NEAREST,
-                            (ClientPrefs::globalAntialiasing && !isPixelSkin) ? GPU_LINEAR : GPU_NEAREST
-                        );
+                    C3D_TexSetFilter(
+                        skinImg.tex,
+                        (ClientPrefs::globalAntialiasing && !isPixelSkin) ? GPU_LINEAR : GPU_NEAREST,
+                        (ClientPrefs::globalAntialiasing && !isPixelSkin) ? GPU_LINEAR : GPU_NEAREST
+                    );
 
-                        parseNoteXml(xmlPath, skinImg.tex, skinImg, noteSubtexs, &noteSubtexFrames);
+                    parseNoteXml(xmlPath, skinImg.tex, skinImg, noteSubtexs, &noteSubtexFrames);
 
-                        // Compute scale so the custom skin visually matches the default note size (73.0f reference)
-                        float customArrowW = (noteSubtexs.size() > 1) ? noteSubtexs[0 * 6 + 1].w : 0.0f;
-                        if (customArrowW > 0.0f) {
-                            arrowSkinScaleFactor = 73.0f / customArrowW;
-                        }
-
-                        // Replace the note spritesheet with the custom skin
-                        noteSheet = skinSheet;
-
-                        printf("\x1b[6;1H[ArrowSkin] Loaded: %s (scale x%.2f)\x1b[K\n",
-                               skinName.c_str(), arrowSkinScaleFactor);
-                    } else {
-                        printf("\x1b[6;1HWARN: ArrowSkin sheet invalid: %s\x1b[K\n", skinName.c_str());
+                    // Compute scale so the custom skin visually matches the default note size (73.0f reference)
+                    float customArrowW = (noteSubtexs.size() > 1) ? noteSubtexs[0 * 6 + 1].w : 0.0f;
+                    if (customArrowW > 0.0f) {
+                        arrowSkinScaleFactor = 73.0f / customArrowW;
                     }
+
+                    noteSheet = skinSheet;
+
+                    printf("\x1b[6;1H[ArrowSkin] Loaded custom: %s (scale x%.2f)\x1b[K\n",
+                           skinName.c_str(), arrowSkinScaleFactor);
                 } else {
-                    printf("\x1b[6;1HWARN: ArrowSkin could not load: %s\x1b[K\n", skinName.c_str());
+                    printf("\x1b[6;1HWARN: ArrowSkin sheet invalid: %s\x1b[K\n", skinName.c_str());
+                    hasCustomSkin = false; // Fallback to default
                 }
             } else {
-                printf("\x1b[6;1HWARN: ArrowSkin files missing for: %s\x1b[K\n", skinName.c_str());
+                printf("\x1b[6;1HWARN: ArrowSkin could not load: %s\x1b[K\n", skinName.c_str());
+                hasCustomSkin = false; // Fallback to default
+            }
+        }
+
+        if (!hasCustomSkin) {
+            auto* csNote = SpritesheetCache::get().load("shared/images/noteSkins/NOTE_assets");
+            noteSheet = csNote ? csNote->sheet : nullptr;
+
+            if (noteSheet) {
+                C2D_Image mainNoteImg = C2D_SpriteSheetGetImage(noteSheet, 0);
+                if (mainNoteImg.tex) C3D_TexSetFilter(mainNoteImg.tex, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST, ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST);
+                if (mainNoteImg.subtex == nullptr) {
+                     printf("\x1b[10;1HERROR: NOTE_assets subtex is NULL\n");
+                     return;
+                }
+                parseNoteXml(Paths::resolve("romfs:/shared/images/noteSkins/NOTE_assets.xml"), mainNoteImg.tex, mainNoteImg, noteSubtexs, &noteSubtexFrames);
+                float defaultArrowW = (noteSubtexs.size() > 1) ? noteSubtexs[0 * 6 + 1].w : 0.0f;
+                if (defaultArrowW > 0.0f) {
+                    arrowSkinScaleFactor = 73.0f / defaultArrowW;
+                }
+            } else {
+                printf("\x1b[6;1HERROR: Could not load NOTE_assets\n");
             }
         }
     }
@@ -846,7 +853,9 @@ void PlayState::init() {
 
     bf = new Character();
     bf->loadFromPsychJson(Paths::characterJson(SongParser::player1));
-    if (bf->curAnim.empty()) bf->loadFromPsychJson(Paths::characterJson("bf-pixel")); // fallback
+    if (bf->curAnim.empty()) {
+        bf->loadFromPsychJson(Paths::characterJson("bf-pixel")); // fallback
+    }
     bf->isPlayer = true;
     if (bf->curCharacterName.empty()) {
         bf->curCharacterName = SongParser::player1.empty() ? "bf" : SongParser::player1;
@@ -970,7 +979,11 @@ void PlayState::init() {
     loadHealthIcon(iconDad, dad ? dad->healthIcon : "face");
 
     score = 0; misses = 0; hits = 0; combo = 0; maxCombo = 0;
-    lastBeat = -1;
+    lastBeat = 0;
+    // Reset dance toggle so countdown always starts from danceRight consistently
+    if (gf)  gf->danced  = false;
+    if (dad) dad->danced = false;
+    if (bf)  bf->danced  = false;
     pOffsetX = 0; pOffsetY = 0; eOffsetX = 0; eOffsetY = 0;
 
 
@@ -1181,6 +1194,11 @@ void PlayState::updateCamera(float dt) {
                 if (curSection != i) {
                     curSection = i;
                     focusCamera(songData.sections[i].mustHitSection);
+                    std::string newFocus = songData.sections[i].mustHitSection ? "boyfriend" : "dad";
+                    if (newFocus != lastCameraFocus) {
+                        lastCameraFocus = newFocus;
+                        LuaManager::get().callFunction("onMoveCamera", {newFocus});
+                    }
                 }
                 break;
             }
@@ -1477,7 +1495,8 @@ void PlayState::update(float dt) {
         } else if (kDown & (KEY_B | KEY_SELECT)) {
             if (!deathConfirmActive) {
                 MusicPlayer::stop();
-                PlayState::instance = nullptr;
+                // NOTE: Do NOT null PlayState::instance here — exitState() will do it.
+                // Nulling it early would crash Lua callbacks during the fade transition.
 
                 if (isStoryMode) {
                     MusicBeatState::switchState(new StoryMenuState());
@@ -2101,7 +2120,9 @@ void PlayState::update(float dt) {
 void PlayState::handleInput(float dt) {
     u32 kDown = hidKeysDown();
     u32 kHeld = hidKeysHeld();
-    u32 mapDown[] = {KEY_DLEFT | KEY_Y, KEY_DDOWN | KEY_B, KEY_DUP | KEY_X, KEY_DRIGHT | KEY_A};
+    u32 mapDown[4];
+    for (int i = 0; i < 4; i++)
+        mapDown[i] = ClientPrefs::noteKeys[i][0] | ClientPrefs::noteKeys[i][1];
 
     bool touchPressed[4] = {false, false, false, false};
     bool touchHeld[4] = {false, false, false, false};
@@ -2279,6 +2300,8 @@ void PlayState::handleInput(float dt) {
         }
     }
 }
+
+//giveSex()
 
 static void C2D_DrawRectRotated(float cx, float cy, float w, float h, float angle_deg, u32 color, float depth = 0.5f) {
     if (angle_deg == 0.0f) {
@@ -3612,7 +3635,6 @@ void PlayState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
         drawHUD(hsX, hsY);
         drawLuaSpritesForCamera("camBottom", true, hsX, hsY);
         drawLuaTextsForCamera("camBottom", true, hsX, hsY);
-
         ShaderManager::get().endCamera("camBottom", bottom, nullptr);
     }
 
@@ -3900,11 +3922,8 @@ void PlayState::exitState() {
     LuaManager::get().close();
     PlayState::instance = nullptr;
 
-    AudioEngine::exit();
-
     noteSheet = nullptr;
     countdownSheet = nullptr;
-    AudioEngine::freeCountdownSounds();
     ratingSheet = nullptr;
 
     for (auto& pair : healthIconCache) {
@@ -3934,8 +3953,8 @@ void PlayState::exitState() {
     // Now that all characters and sprites are gone, clear the shared texture pools.
     SpritesheetCache::get().clear();
 
-    delete currentStage;
-    if (vcrFontBuf) C2D_TextBufDelete(vcrFontBuf);
+    if (currentStage) { delete currentStage; currentStage = nullptr; }
+    if (vcrFontBuf) { C2D_TextBufDelete(vcrFontBuf); vcrFontBuf = nullptr; }
     if (botplayTextBuf) {
         C2D_TextBufDelete(botplayTextBuf);
         botplayTextBuf = nullptr;
@@ -3948,7 +3967,7 @@ void PlayState::exitState() {
         delete pauseSubState;
         pauseSubState = nullptr;
     }
-    if (lyricsTextBuf) C2D_TextBufDelete(lyricsTextBuf);
+    if (lyricsTextBuf) { C2D_TextBufDelete(lyricsTextBuf); lyricsTextBuf = nullptr; }
     if (debugTextBuf) {
         C2D_TextBufDelete(debugTextBuf);
         debugTextBuf = nullptr;
@@ -3965,6 +3984,11 @@ void PlayState::exitState() {
     lazyRawTex = nullptr;
     lazyRawSub = nullptr;
     lazyIsRaw = false;
+
+    // AudioEngine teardown goes last — after all texture/sprite/character memory is freed.
+    // Calling it earlier risks race conditions if any destructor touches audio state.
+    AudioEngine::exit();
+    AudioEngine::freeCountdownSounds();
 
     // Resume background asset loading for the next state (e.g. FreeplayState / StoryMenuState)
     AsyncAssetManager::get().resume();
@@ -4062,8 +4086,13 @@ void PlayState::drawLuaSpritesForCamera(const std::string& camera, bool front, f
 
         float depth = 0.11f; // Default back
         if (front) depth = 0.52f; // Default front
-        if (camera == "camHUD" || camera == "hud") depth += 0.4f;
-        if (camera == "camOther" || camera == "other") depth += 0.47f;
+        if (ls.depth >= 0.0f) depth = ls.depth;
+        if (camera == "camHUD" || camera == "hud") {
+            if (ls.depth < 0.0f) depth += 0.4f;
+        }
+        if (camera == "camOther" || camera == "other") {
+            if (ls.depth < 0.0f) depth += 0.47f;
+        }
 
         float finalAlpha = ls.alpha;
         if (camera == "camGame" || camera == "game") finalAlpha *= camAlpha;
@@ -4434,6 +4463,11 @@ std::string PlayState::wrapString(const std::string& text, float scale, float ma
 void PlayState::tickCountdown() {
     countdownTick++;
     AudioEngine::playCountdownSound(countdownTick - 1);
+
+    // Characters dance on countdown beats
+    if (gf  && (countdownTick % gf->danceEveryNumBeats  == 0)) gf->dance();
+    if (dad && (countdownTick % dad->danceEveryNumBeats == 0)) dad->dance();
+    if (bf  && (countdownTick % bf->danceEveryNumBeats  == 0)) bf->dance();
 
     if (countdownTick == 2) {
         currentCountdownFrame = "ready";

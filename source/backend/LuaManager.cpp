@@ -107,6 +107,7 @@ static const char* HOOK_NAMES[] = {
     "onEvent",
     "goodNoteHit", "opponentNoteHit",
     "onSongStart",
+    "onMoveCamera",
     nullptr
 };
 
@@ -239,6 +240,14 @@ void LuaManager::syncGlobals() {
     std::transform(lowerSong.begin(), lowerSong.end(), lowerSong.begin(), ::tolower);
     lua_pushstring(L, lowerSong.c_str());
     lua_setglobal(L, "songName");
+
+    // Sync mustHitSection
+    bool mustHit = false;
+    if (PlayState::instance && !PlayState::instance->songData.sections.empty() && PlayState::instance->curSection >= 0 && PlayState::instance->curSection < (int)PlayState::instance->songData.sections.size()) {
+        mustHit = PlayState::instance->songData.sections[PlayState::instance->curSection].mustHitSection;
+    }
+    lua_pushboolean(L, mustHit);
+    lua_setglobal(L, "mustHitSection");
 
     // Settings & State Toggles
     lua_pushboolean(L, ClientPrefs::downscroll);
@@ -1810,6 +1819,7 @@ int LuaManager::lua_getProperty(lua_State* L) {
         else if (PlayState::instance->luaSpriteIndices.count(obj)) {
             auto& s = PlayState::instance->luaSprites[PlayState::instance->luaSpriteIndices[obj]];
             if (prop == "alpha") lua_pushnumber(L, s.alpha);
+            else if (prop == "depth") lua_pushnumber(L, s.depth);
             else if (prop == "x") lua_pushnumber(L, s.x);
             else if (prop == "y") lua_pushnumber(L, s.y);
             else if (prop == "scale.x" || prop == "scale") lua_pushnumber(L, s.scaleX);
@@ -2165,6 +2175,7 @@ int LuaManager::lua_setProperty(lua_State* L) {
         else if (PlayState::instance->luaSpriteIndices.count(obj)) {
             auto& s = PlayState::instance->luaSprites[PlayState::instance->luaSpriteIndices[obj]];
             if (prop == "alpha") s.alpha = (float)luaL_checknumber(L, 2);
+            else if (prop == "depth") s.depth = (float)luaL_checknumber(L, 2);
             else if (prop == "x") s.x = (float)luaL_checknumber(L, 2);
             else if (prop == "y") s.y = (float)luaL_checknumber(L, 2);
             else if (prop == "scale.x" || prop == "scale") {
@@ -3717,6 +3728,20 @@ static u32 getKeys(const std::string& key) {
     if (k == "back" || k == "cancel" || k == "b") return KEY_B;
     if (k == "x") return KEY_X;
     if (k == "y") return KEY_Y;
+
+    // Action Keys
+    if (k == "act1") return ClientPrefs::actionKeys[0];
+    if (k == "act2") return ClientPrefs::actionKeys[1];
+    if (k == "act3") {
+        bool isNew3DS = false;
+        APT_CheckNew3DS(&isNew3DS);
+        return isNew3DS ? ClientPrefs::actionKeys[2] : 0;
+    }
+    if (k == "act4") {
+        bool isNew3DS = false;
+        APT_CheckNew3DS(&isNew3DS);
+        return isNew3DS ? ClientPrefs::actionKeys[3] : 0;
+    }
 
     // Triggers & Bumpers
     if (k == "l" || k == "l1") return KEY_L;

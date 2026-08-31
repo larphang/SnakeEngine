@@ -37,6 +37,7 @@ Character::Character() {
     frameTimer = 0;
     animFinished = false;
     visible = true;
+    isSpritemap = false;
 }
 
 Character::~Character() {
@@ -153,9 +154,6 @@ bool Character::loadFromCache(const std::string& path, CharacterData* data) {
         anim.prefix = ab.prefix;
         anim.fps = ab.fps;
         anim.loop = ab.loop;
-        if (anim.name == "danceLeft" || anim.name == "danceRight" || anim.name == "idle") {
-            anim.loop = false;
-        }
         anim.offsetX = ab.offsetX;
         anim.offsetY = ab.offsetY;
         
@@ -338,13 +336,29 @@ CharacterData* Character::parseDataAsync(const std::string& charName) {
     data->charName = charName;
     
     std::string cachePath = Paths::characterCache(charName);
-    if (Paths::fileExists(cachePath)) {
+    std::string jsonPath = Paths::characterJson(charName);
+    
+    std::string animCheck = Paths::getPath("Animation.json", "images/characters/" + charName);
+    if (Paths::fileExists(animCheck)) {
+        remove(cachePath.c_str());
+    }
+    
+    bool useCache = false;
+    if (Paths::fileExists(cachePath) && Paths::fileExists(jsonPath)) {
+        struct stat cacheSt, jsonSt;
+        if (stat(cachePath.c_str(), &cacheSt) == 0 && stat(jsonPath.c_str(), &jsonSt) == 0) {
+            if (cacheSt.st_mtime >= jsonSt.st_mtime) {
+                useCache = true;
+            }
+        }
+    }
+    
+    if (useCache) {
         if (loadFromCache(cachePath, data)) {
             return data;
         }
     }
     
-    std::string jsonPath = Paths::characterJson(charName);
     if (!Paths::fileExists(jsonPath)) {
         printf("\x1b[14;1HWARN: Character '%s' not found. Using Placeholder.\x1b[K\n", charName.c_str());
         data->isPlaceholder = true;
@@ -393,10 +407,19 @@ CharacterData* Character::parseDataAsync(const std::string& charName) {
     json_t *jsonImage = json_object_get(root, "image");
     if (json_is_string(jsonImage)) {
         fullPath = json_string_value(jsonImage);
-        SparrowParser::parseXml(Paths::xml(fullPath), data->frames);
+        data->imagePath = fullPath;
         
-        std::string t3xPath = Paths::image(fullPath);
-        std::string rawPath = ModHandler::get().getModPath("images/" + fullPath + ".rawtex");
+        std::string animJsonPath = Paths::getPath("Animation.json", "images/" + fullPath);
+        std::string atlasJsonPath = Paths::getPath("spritemap1.json", "images/" + fullPath);
+        
+        if (Paths::fileExists(animJsonPath) && Paths::fileExists(atlasJsonPath)) {
+            data->isSpritemap = true;
+        } else {
+            data->isSpritemap = false;
+            SparrowParser::parseXml(Paths::xml(fullPath), data->frames);
+            
+            std::string t3xPath = Paths::image(fullPath);
+            std::string rawPath = ModHandler::get().getModPath("images/" + fullPath + ".rawtex");
         if (rawPath.empty() && Paths::fileExists("romfs:/preload/images/" + fullPath + ".rawtex")) {
             rawPath = "romfs:/preload/images/" + fullPath + ".rawtex";
         }
@@ -484,6 +507,7 @@ CharacterData* Character::parseDataAsync(const std::string& charName) {
                 }
                 fclose(f);
             }
+            }
         }
     }
 
@@ -496,47 +520,48 @@ CharacterData* Character::parseDataAsync(const std::string& charName) {
             anim.prefix = json_string_value(json_object_get(value, "name"));
             anim.fps = (int)json_integer_value(json_object_get(value, "fps"));
             anim.loop = json_boolean_value(json_object_get(value, "loop"));
-            if (anim.name == "danceLeft" || anim.name == "danceRight" || anim.name == "idle") {
-                anim.loop = false;
-            }
-            
-            std::vector<int> prefixIndices;
-            for (int i = 0; i < (int)data->frames.size(); i++) {
-                std::string frameName = data->frames[i].name;
-                if (frameName.find(anim.prefix) == 0) {
-                    bool matches = false;
-                    if (frameName.length() == anim.prefix.length()) matches = true;
-                    else {
-                        std::string rest = frameName.substr(anim.prefix.length());
-                        size_t firstPos = rest.find_first_not_of(" \t");
-                        if (firstPos != std::string::npos) {
-                            std::string actualRest = rest.substr(firstPos);
-                            if (isdigit(actualRest[0]) || actualRest.find("instancia") == 0) matches = true;
-                        }
-                    }
-                    if (matches) prefixIndices.push_back(i);
-                }
-            }
-
-            json_t *indices = json_object_get(value, "indices");
-            if (json_is_array(indices) && json_array_size(indices) > 0) {
-                size_t iIdx; json_t *iVal;
-                json_array_foreach(indices, iIdx, iVal) {
-                    int localIdx = (int)json_integer_value(iVal);
-                    if (localIdx >= 0 && localIdx < (int)prefixIndices.size()) {
-                        anim.indices.push_back(prefixIndices[localIdx]);
-                    }
-                }
-            } else {
-                anim.indices = prefixIndices;
-            }
-
             json_t *offsets = json_object_get(value, "offsets");
             if (json_is_array(offsets) && json_array_size(offsets) >= 2) {
                 anim.offsetX = (float)json_number_value(json_array_get(offsets, 0));
                 anim.offsetY = (float)json_number_value(json_array_get(offsets, 1));
             } else { anim.offsetX = 0; anim.offsetY = 0; }
-            data->animations[anim.name] = anim;
+
+            if (data->isSpritemap) {
+                data->animations[anim.name] = anim;
+            } else {
+                std::vector<int> prefixIndices;
+                for (int i = 0; i < (int)data->frames.size(); i++) {
+                    std::string frameName = data->frames[i].name;
+                    if (frameName.find(anim.prefix) == 0) {
+                        bool matches = false;
+                        if (frameName.length() == anim.prefix.length()) matches = true;
+                        else {
+                            std::string rest = frameName.substr(anim.prefix.length());
+                            size_t firstPos = rest.find_first_not_of(" \t");
+                            if (firstPos != std::string::npos) {
+                                std::string actualRest = rest.substr(firstPos);
+                                if (isdigit(actualRest[0]) || actualRest.find("instancia") == 0) matches = true;
+                            }
+                        }
+                        if (matches) prefixIndices.push_back(i);
+                    }
+                }
+
+                json_t *indices = json_object_get(value, "indices");
+                if (json_is_array(indices) && json_array_size(indices) > 0) {
+                    size_t iIdx; json_t *iVal;
+                    json_array_foreach(indices, iIdx, iVal) {
+                        int localIdx = (int)json_integer_value(iVal);
+                        if (localIdx >= 0 && localIdx < (int)prefixIndices.size()) {
+                            anim.indices.push_back(prefixIndices[localIdx]);
+                        }
+                    }
+                } else {
+                    anim.indices = prefixIndices;
+                }
+
+                data->animations[anim.name] = anim;
+            }
         }
     }
 
@@ -544,7 +569,7 @@ CharacterData* Character::parseDataAsync(const std::string& charName) {
     if (json_is_number(jsonSingDur)) data->singDuration = (float)json_number_value(jsonSingDur);
 
     if (data->animations.count("danceLeft") && data->animations.count("danceRight") && 
-        !data->animations["danceLeft"].indices.empty() && !data->animations["danceRight"].indices.empty()) {
+        (data->isSpritemap || (!data->animations["danceLeft"].indices.empty() && !data->animations["danceRight"].indices.empty()))) {
         data->danceEveryNumBeats = 1;
     } else {
         data->danceEveryNumBeats = 2;
@@ -552,7 +577,7 @@ CharacterData* Character::parseDataAsync(const std::string& charName) {
 
     json_decref(root);
     
-    if (!data->isPlaceholder && !fullPath.empty()) {
+    if (!data->isPlaceholder && !fullPath.empty() && !data->isSpritemap) {
         bool isPlaying = (PlayState::instance != nullptr && Conductor::songPosition >= 0.0f);
         if (!isPlaying) {
             saveToCache(cachePath, data, fullPath);
@@ -585,7 +610,22 @@ void Character::instantiateFromData(CharacterData* data) {
     animations = std::move(data->animations);
     frames = std::move(data->frames);
 
-    if (data->isRawTex && data->fileBuffer && data->fileSize > 0) {
+    isSpritemap = data->isSpritemap;
+    if (isSpritemap) {
+        std::string animJsonPath = Paths::getPath("Animation.json", "images/" + data->imagePath);
+        std::string atlasJsonPath = Paths::getPath("spritemap1.json", "images/" + data->imagePath);
+        std::string pngPath = Paths::getPath("spritemap1.t3x", "images/" + data->imagePath);
+        
+        spritemapAnim.loadSpritemap(pngPath, atlasJsonPath, animJsonPath);
+        spritemapAnim.scaleX = charScale;
+        spritemapAnim.scaleY = charScale;
+        
+        for (const auto& pair : animations) {
+            const auto& anim = pair.second;
+            spritemapAnim.addSpritemapAnim(anim.name, anim.prefix, anim.indices, anim.fps, anim.loop);
+        }
+    } else {
+        if (data->isRawTex && data->fileBuffer && data->fileSize > 0) {
         rawTex = new C3D_Tex();
         memset(rawTex, 0, sizeof(C3D_Tex));
         if (!C3D_TexInit(rawTex, data->rawWidth, data->rawHeight, GPU_RGBA8)) {
@@ -621,6 +661,7 @@ void Character::instantiateFromData(CharacterData* data) {
         
         data->rawTex = nullptr;
         data->rawSub = nullptr;
+    }
     }
     
     if (mainImage.tex) {
@@ -706,8 +747,27 @@ void Character::loadFromPsychJson(const std::string& jsonPath) {
     json_t *jsonImage = json_object_get(root, "image");
     if (json_is_string(jsonImage)) {
         std::string fullPath = json_string_value(jsonImage);
-        loadSparrowXml(Paths::xml(fullPath));
-        addSpriteSheet(Paths::image(fullPath));
+        charTexturePath = fullPath;
+        
+        std::string animJsonPath = Paths::getPath("Animation.json", "images/" + fullPath);
+        std::string atlasJsonPath = Paths::getPath("spritemap1.json", "images/" + fullPath);
+        std::string pngPath = Paths::getPath("spritemap1.t3x", "images/" + fullPath);
+        
+        if (Paths::fileExists(animJsonPath) && Paths::fileExists(atlasJsonPath)) {
+            bool success = spritemapAnim.loadSpritemap(pngPath, atlasJsonPath, animJsonPath);
+            if (success) {
+                isSpritemap = true;
+                spritemapAnim.scaleX = charScale;
+                spritemapAnim.scaleY = charScale;
+            } else {
+                isSpritemap = false;
+                curAnim = "ERROR_SPRITEMAP_LOAD_FAILED";
+            }
+        } else {
+            isSpritemap = false;
+            loadSparrowXml(Paths::xml(fullPath));
+            addSpriteSheet(Paths::image(fullPath));
+        }
     }
 
 
@@ -722,47 +782,6 @@ void Character::loadFromPsychJson(const std::string& jsonPath) {
         anim.prefix = json_string_value(json_object_get(value, "name"));
         anim.fps = (int)json_integer_value(json_object_get(value, "fps"));
         anim.loop = json_boolean_value(json_object_get(value, "loop"));
-        if (anim.name == "danceLeft" || anim.name == "danceRight" || anim.name == "idle") {
-            anim.loop = false;
-        }
-        
-        json_t *indices = json_object_get(value, "indices");
-        
-        std::vector<int> prefixIndices;
-        for (int i = 0; i < (int)frames.size(); i++) {
-            std::string frameName = frames[i].name;
-            if (frameName.find(anim.prefix) == 0) {
-                bool matches = false;
-                if (frameName.length() == anim.prefix.length()) matches = true;
-                else {
-                    std::string rest = frameName.substr(anim.prefix.length());
-                    size_t firstPos = rest.find_first_not_of(" \t");
-                    if (firstPos != std::string::npos) {
-                        std::string actualRest = rest.substr(firstPos);
-                        if (isdigit(actualRest[0]) || actualRest.find("instancia") == 0) {
-                            matches = true;
-                        }
-                    }
-                }
-
-                if (matches) {
-                    prefixIndices.push_back(i);
-                }
-            }
-        }
-
-        if (json_is_array(indices) && json_array_size(indices) > 0) {
-            size_t iIdx; json_t *iVal;
-            json_array_foreach(indices, iIdx, iVal) {
-                int localIdx = (int)json_integer_value(iVal);
-                if (localIdx >= 0 && localIdx < (int)prefixIndices.size()) {
-                    anim.indices.push_back(prefixIndices[localIdx]);
-                }
-            }
-        } else {
-            anim.indices = prefixIndices;
-        }
-
         json_t *offsets = json_object_get(value, "offsets");
         if (json_is_array(offsets) && json_array_size(offsets) >= 2) {
             anim.offsetX = (float)json_number_value(json_array_get(offsets, 0));
@@ -770,22 +789,141 @@ void Character::loadFromPsychJson(const std::string& jsonPath) {
         } else {
             anim.offsetX = 0; anim.offsetY = 0;
         }
-        animations[anim.name] = anim;
+
+        if (isSpritemap) {
+            json_t *indices = json_object_get(value, "indices");
+            if (json_is_array(indices) && json_array_size(indices) > 0) {
+                size_t iIdx;
+                json_t *iVal;
+                json_array_foreach(indices, iIdx, iVal) {
+                    anim.indices.push_back(json_integer_value(iVal));
+                }
+            }
+            animations[anim.name] = anim;
+
+            spritemapAnim.addSpritemapAnim(anim.name, anim.prefix, anim.indices, anim.fps, anim.loop);
+        } else {
+            json_t *indices = json_object_get(value, "indices");
+            
+            std::vector<int> prefixIndices;
+            for (int i = 0; i < (int)frames.size(); i++) {
+                std::string frameName = frames[i].name;
+                if (frameName.find(anim.prefix) == 0) {
+                    bool matches = false;
+                    if (frameName.length() == anim.prefix.length()) matches = true;
+                    else {
+                        std::string rest = frameName.substr(anim.prefix.length());
+                        size_t firstPos = rest.find_first_not_of(" \t");
+                        if (firstPos != std::string::npos) {
+                            std::string actualRest = rest.substr(firstPos);
+                            if (isdigit(actualRest[0]) || actualRest.find("instancia") == 0) {
+                                matches = true;
+                            }
+                        }
+                    }
+
+                    if (matches) {
+                        prefixIndices.push_back(i);
+                    }
+                }
+            }
+
+            if (json_is_array(indices) && json_array_size(indices) > 0) {
+                size_t iIdx; json_t *iVal;
+                json_array_foreach(indices, iIdx, iVal) {
+                    int localIdx = (int)json_integer_value(iVal);
+                    if (localIdx >= 0 && localIdx < (int)prefixIndices.size()) {
+                        anim.indices.push_back(prefixIndices[localIdx]);
+                    }
+                }
+            } else {
+                anim.indices = prefixIndices;
+            }
+
+            animations[anim.name] = anim;
+        }
     }
 
     json_t *jsonSingDur = json_object_get(root, "sing_duration");
     if (json_is_number(jsonSingDur)) singDuration = (float)json_number_value(jsonSingDur);
     else singDuration = 4.0f;
 
-    if (animations.count("danceLeft") && animations.count("danceRight") && 
-        !animations["danceLeft"].indices.empty() && !animations["danceRight"].indices.empty()) {
-        danceEveryNumBeats = 1;
+    if (isSpritemap) {
+        if (animations.count("danceLeft") && animations.count("danceRight")) {
+            danceEveryNumBeats = 1;
+        } else {
+            danceEveryNumBeats = 2;
+        }
     } else {
-        danceEveryNumBeats = 2;
+        if (animations.count("danceLeft") && animations.count("danceRight") && 
+            !animations["danceLeft"].indices.empty() && !animations["danceRight"].indices.empty()) {
+            danceEveryNumBeats = 1;
+        } else {
+            danceEveryNumBeats = 2;
+        }
     }
 
     json_decref(root);
     dance();
+}
+
+void Character::saveToPsychJson(const std::string& path) {
+    ensureDirExists(path);
+    json_t* root = json_object();
+    
+    // Arrays
+    json_t* anims_array = json_array();
+    for (const auto& kv : animations) {
+        json_t* anim = json_object();
+        json_object_set_new(anim, "anim", json_string(kv.first.c_str()));
+        json_object_set_new(anim, "name", json_string(kv.second.prefix.c_str()));
+        json_object_set_new(anim, "fps", json_integer(kv.second.fps));
+        json_object_set_new(anim, "loop", kv.second.loop ? json_true() : json_false());
+        
+        json_t* offsets = json_array();
+        json_array_append_new(offsets, json_integer((int)kv.second.offsetX));
+        json_array_append_new(offsets, json_integer((int)kv.second.offsetY));
+        json_object_set_new(anim, "offsets", offsets);
+        
+        json_t* indices = json_array();
+        for (int idx : kv.second.indices) {
+            json_array_append_new(indices, json_integer(idx));
+        }
+        json_object_set_new(anim, "indices", indices);
+        
+        json_array_append_new(anims_array, anim);
+    }
+    json_object_set_new(root, "animations", anims_array);
+    
+    // Convert charTexturePath back to image string
+    std::string img = charTexturePath;
+    if (img.find("shared/images/") == 0) img = img.substr(14);
+    json_object_set_new(root, "image", json_string(img.c_str()));
+    
+    json_object_set_new(root, "healthicon", json_string(healthIcon.c_str()));
+    json_object_set_new(root, "flip_x", flipX ? json_true() : json_false());
+    json_object_set_new(root, "no_antialiasing", noAntialiasing ? json_true() : json_false());
+    json_object_set_new(root, "scale", json_real(charScale));
+    json_object_set_new(root, "sing_duration", json_real(singDuration));
+    
+    json_t* pos = json_array();
+    json_array_append_new(pos, json_integer((int)baseX));
+    json_array_append_new(pos, json_integer((int)baseY));
+    json_object_set_new(root, "position", pos);
+    
+    json_t* cam = json_array();
+    json_array_append_new(cam, json_integer((int)camOffsetX));
+    json_array_append_new(cam, json_integer((int)camOffsetY));
+    json_object_set_new(root, "camera_position", cam);
+    
+    json_t* hb = json_array();
+    json_array_append_new(hb, json_integer((int)(healthbarR * 255)));
+    json_array_append_new(hb, json_integer((int)(healthbarG * 255)));
+    json_array_append_new(hb, json_integer((int)(healthbarB * 255)));
+    json_object_set_new(root, "healthbar_colors", hb);
+    
+    json_dump_file(root, path.c_str(), JSON_INDENT(4));
+    json_decref(root);
 }
 
 void Character::dance(bool forced) {
@@ -795,15 +933,27 @@ void Character::dance(bool forced) {
     float singThreshold = (Conductor::stepCrochet * 0.0011f) * singDuration;
     if (!forced && (curAnim.find("sing") != std::string::npos && curAnim.find("miss") == std::string::npos) && holdTimer < singThreshold) return;
 
-    if (animations.count("danceLeft") && animations.count("danceRight") && 
-        !animations["danceLeft"].indices.empty() && !animations["danceRight"].indices.empty()) {
-        danced = !danced;
-        if (danced) playAnim("danceRight", forced);
-        else playAnim("danceLeft", forced);
-    } else if (animations.count("idle") && !animations["idle"].indices.empty()) {
-        playAnim("idle", forced);
-    } else if (animations.count("dance") && !animations["dance"].indices.empty()) {
-        playAnim("dance", forced);
+    if (isSpritemap) {
+        if (animations.count("danceLeft") && animations.count("danceRight")) {
+            danced = !danced;
+            if (danced) playAnim("danceRight", forced);
+            else playAnim("danceLeft", forced);
+        } else if (animations.count("idle")) {
+            playAnim("idle", forced);
+        } else if (animations.count("dance")) {
+            playAnim("dance", forced);
+        }
+    } else {
+        if (animations.count("danceLeft") && animations.count("danceRight") && 
+            !animations["danceLeft"].indices.empty() && !animations["danceRight"].indices.empty()) {
+            danced = !danced;
+            if (danced) playAnim("danceRight", forced);
+            else playAnim("danceLeft", forced);
+        } else if (animations.count("idle") && !animations["idle"].indices.empty()) {
+            playAnim("idle", forced);
+        } else if (animations.count("dance") && !animations["dance"].indices.empty()) {
+            playAnim("dance", forced);
+        }
     }
 }
 
@@ -983,6 +1133,26 @@ void Character::addSpriteSheet(const std::string& t3xPath) {
 }
 
 void Character::playAnim(const std::string& animName, bool forced) {
+    if (isSpritemap) {
+        if (!forced && curAnim == animName && !animFinished) return;
+        if (spritemapAnim.hasAnim(animName)) {
+            specialAnim = false;
+            curAnim = animName;
+            spritemapAnim.play(animName, forced);
+            animFinished = spritemapAnim.animFinished;
+
+            if (curCharacterName.rfind("gf-", 0) == 0 || curCharacterName == "gf") {
+                if (animName == "singLEFT")
+                    danced = true;
+                else if (animName == "singRIGHT")
+                    danced = false;
+                else if (animName == "singUP" || animName == "singDOWN")
+                    danced = !danced;
+            }
+        }
+        return;
+    }
+
     if (!forced && curAnim == animName && !animFinished) return;
     if (animations.count(animName)) {
         specialAnim = false;
@@ -1044,6 +1214,43 @@ void Character::playAnimFES(const std::string& path, const std::string& animName
 }
 
 void Character::update(float dt) {
+    if (isSpritemap) {
+        if (curAnim.empty()) return;
+        
+        if (curAnim.find("sing") != std::string::npos) {
+            holdTimer += dt;
+        } else {
+            holdTimer = 0;
+        }
+
+        if (!isPlayer) {
+            if (curAnim.find("sing") != std::string::npos && curAnim.find("miss") == std::string::npos) {
+                float singThreshold = (Conductor::stepCrochet * 0.0011f) * singDuration;
+                if (holdTimer >= singThreshold) {
+                    dance();
+                    holdTimer = 0;
+                }
+            }
+        }
+
+        if (curAnim.find("miss") != std::string::npos && animFinished) {
+            dance(true);
+        }
+
+        spritemapAnim.update(dt);
+        animFinished = spritemapAnim.animFinished;
+
+        if (animFinished && hasAnimation(curAnim + "-loop")) {
+            playAnim(curAnim + "-loop");
+        }
+
+        if (specialAnim && animFinished) {
+            specialAnim = false;
+            dance();
+        }
+        return;
+    }
+
     if (!currentAnimData || currentAnimData->indices.empty()) return;
     
     if (curAnim.find("sing") != std::string::npos) {
@@ -1066,7 +1273,13 @@ void Character::update(float dt) {
         dance(true);
     }
 
-    if (animFinished) return;
+    if (animFinished) {
+        if (hasAnimation(curAnim + "-loop")) {
+            playAnim(curAnim + "-loop");
+        } else {
+            return;
+        }
+    }
     
     frameTimer += dt * currentAnimData->fps;
     while (frameTimer >= 1.0f && !animFinished) {
@@ -1083,9 +1296,13 @@ void Character::update(float dt) {
         }
     }
 
-    if (specialAnim && animFinished) {
-        specialAnim = false;
-        dance();
+    if (animFinished) {
+        if (hasAnimation(curAnim + "-loop")) {
+            playAnim(curAnim + "-loop");
+        } else if (specialAnim) {
+            specialAnim = false;
+            dance();
+        }
     }
 }
 
@@ -1095,6 +1312,52 @@ bool Character::hasAnimation(const std::string& animName) {
 
 void Character::draw(float stageX, float stageY, float depth, float zoom, float camX, float camY, float shakeX, float shakeY) {
     if (!visible) return;
+
+    if (isSpritemap) {
+        if (curAnim.empty()) return;
+
+        float screenScale = 240.0f / 720.0f;
+        float finalScaleX = charScaleX * screenScale * zoom;
+        float finalScaleY = charScaleY * screenScale * zoom;
+
+        float baseX = stageX + x - camX;
+        float baseY = stageY + y - camY;
+        float drawX = (baseX * screenScale * zoom) + (ScreenWidthTop / 2.0f) + shakeX;
+        float drawY = (baseY * screenScale * zoom) + (ScreenHeight / 2.0f) + shakeY;
+
+        float offX = 0.0f;
+        float offY = 0.0f;
+        if (animations.count(curAnim)) {
+            offX = animations[curAnim].offsetX;
+            offY = animations[curAnim].offsetY;
+        }
+
+        bool shouldFlip = (isPlayer != flipX);
+
+        if (shouldFlip) {
+            drawX += offX * finalScaleX;
+        } else {
+            drawX -= offX * finalScaleX;
+        }
+        drawY -= offY * finalScaleY;
+
+        C2D_ImageTint tint;
+        C2D_ImageTint* tintPtr = nullptr;
+        if (isHighlighted) {
+            C2D_PlainImageTint(&tint, C2D_Color32(0, 255, 255, (u8)(alpha * 255.0f)), 0.6f);
+            tintPtr = &tint;
+        } else if (alpha < 1.0f) {
+            C2D_AlphaImageTint(&tint, alpha);
+            tintPtr = &tint;
+        }
+
+        spritemapAnim.flipX = shouldFlip;
+        spritemapAnim.alpha = alpha;
+        spritemapAnim.angle = angle;
+        spritemapAnim.draw(drawX, drawY, depth, finalScaleX, finalScaleY, tintPtr);
+        return;
+    }
+
     if (!currentAnimData || currentAnimData->indices.empty()) {
         const std::vector<Frame>& useFrames = isExternalAnim ? externalFrames : frames;
         if (!useFrames.empty()) {
@@ -1116,6 +1379,9 @@ void Character::draw(float stageX, float stageY, float depth, float zoom, float 
                      C2D_DrawRectSolid(drawX, drawY, depth, 64.0f * finalScale, 64.0f * finalScale, C2D_Color32(100, 100, 100, (u8)(alpha * 255.0f)));
                      return;
                  }
+             } else if (isHighlighted) {
+                 C2D_PlainImageTint(&tint, C2D_Color32(0, 255, 255, (u8)(alpha * 255.0f)), 0.6f);
+                 tintPtr = &tint;
              } else if (alpha < 1.0f) {
                  C2D_AlphaImageTint(&tint, alpha);
                  tintPtr = &tint;
@@ -1237,5 +1503,14 @@ void Character::setAntialiasing(bool antialiased) {
     }
     for (auto& f : externalFrames) {
         if (f.tex) C3D_TexSetFilter(f.tex, filter, filter);
+    }
+}
+
+void Character::setAnimLoop(const std::string& animName, bool loop) {
+    if (animations.count(animName)) {
+        animations[animName].loop = loop;
+    }
+    if (isSpritemap) {
+        spritemapAnim.setLoop(animName, loop);
     }
 }

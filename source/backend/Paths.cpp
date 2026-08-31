@@ -307,9 +307,6 @@ std::string Paths::songJson(const std::string& song, const std::string& difficul
 
 
 std::string Paths::stageJson(const std::string& stage) {
-    std::string editorPath = "sdmc:/SnakeEngine/editor/stages/" + stage + ".json";
-    if (fileExists(editorPath)) return resolve(editorPath);
-    
     return getPath(stage + ".json", "stages", "preload");
 }
 

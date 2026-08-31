@@ -13,22 +13,7 @@
 #include <unordered_map>
 
 static std::string lastDifficultyName = "Normal";
-static std::unordered_map<std::string, bool> isCharacterIconMap;
 
-static void enforceLRUCache(std::unordered_map<std::string, SpriteCacheEntry>& cache, size_t maxSize) {
-    if (cache.size() > maxSize) {
-        auto oldest = cache.begin();
-        for (auto it = cache.begin(); it != cache.end(); ++it) {
-            if (it->second.lastAccessFrame < oldest->second.lastAccessFrame) {
-                oldest = it;
-            }
-        }
-        if (oldest->second.sheet) {
-            C2D_SpriteSheetFree(oldest->second.sheet);
-        }
-        cache.erase(oldest);
-    }
-}
 
 static std::vector<std::string> getAllUniqueDifficulties() {
     std::vector<std::string> diffs;
@@ -338,18 +323,94 @@ void FreeplayState::init() {
         targetAccuracy = 0.0f;
         lerpAccuracy = 0.0f;
     }
+
+    LightLock_Init(&loadLock);
+    LightEvent_Init(&loadEvent, RESET_ONESHOT);
+    threadRunning = true;
+    requestPending = false;
+    loadCompleted = false;
+    loadThread = threadCreate(threadMain, this, 32 * 1024, 30, -1, false);
+
+    lastSelectedCheck = -1;
+    lastDifficultyCheck = -1;
 }
 
 void FreeplayState::update(float dt) {
-    cacheFrameCount++;
     loadingAngle += dt * 3.14159f * 2.0f;
     
-    static int prevSelectedForCache = -1;
-    if (prevSelectedForCache != curSelected) {
-        timeSinceSelectionChange = 0.0f;
-        prevSelectedForCache = curSelected;
-    } else {
-        timeSinceSelectionChange += dt;
+    // Check if background load has finished and consume it
+    bool loaded = false;
+    LoadedRawData localDiff;
+    LoadedRawData localIcon;
+    LoadedRawData localAlbum;
+    LoadedRawData localAlbumText;
+    bool localIconIsChar = false;
+    int localSongIndex = -1;
+
+    LightLock_Lock(&loadLock);
+    if (loadCompleted) {
+        localDiff = loadedDiffData;
+        localIcon = loadedIconData;
+        localAlbum = loadedAlbumData;
+        localAlbumText = loadedAlbumTextData;
+        localIconIsChar = loadedIconIsChar;
+        localSongIndex = loadedSongIndex;
+        
+        // Reset buffers in shared state to prevent double-free in worker thread
+        loadedDiffData.buffer = nullptr;
+        loadedIconData.buffer = nullptr;
+        loadedAlbumData.buffer = nullptr;
+        loadedAlbumTextData.buffer = nullptr;
+        loadCompleted = false;
+        loaded = true;
+    }
+    LightLock_Unlock(&loadLock);
+
+    if (loaded) {
+        // Free all old sheets — worker always delivers all assets now
+        if (activeDiffSheet)      { C2D_SpriteSheetFree(activeDiffSheet);      activeDiffSheet      = nullptr; }
+        if (activeIconSheet)      { C2D_SpriteSheetFree(activeIconSheet);      activeIconSheet      = nullptr; }
+        if (activeAlbumSheet)     { C2D_SpriteSheetFree(activeAlbumSheet);     activeAlbumSheet     = nullptr; }
+        if (activeAlbumTextSheet) { C2D_SpriteSheetFree(activeAlbumTextSheet); activeAlbumTextSheet = nullptr; }
+        
+        // Instantiate new sheets from memory on main thread
+        if (localDiff.buffer) {
+            activeDiffSheet = C2D_SpriteSheetLoadFromMem(localDiff.buffer, localDiff.size);
+            linearFree(localDiff.buffer);
+        }
+        if (localIcon.buffer) {
+            activeIconSheet = C2D_SpriteSheetLoadFromMem(localIcon.buffer, localIcon.size);
+            linearFree(localIcon.buffer);
+        }
+        if (localAlbum.buffer) {
+            activeAlbumSheet = C2D_SpriteSheetLoadFromMem(localAlbum.buffer, localAlbum.size);
+            linearFree(localAlbum.buffer);
+        }
+        if (localAlbumText.buffer) {
+            activeAlbumTextSheet = C2D_SpriteSheetLoadFromMem(localAlbumText.buffer, localAlbumText.size);
+            linearFree(localAlbumText.buffer);
+        }
+        
+        activeIconIsChar = localIconIsChar;
+        activeSongIndex = localSongIndex;
+        
+        // Apply linear/nearest filter
+        if (activeDiffSheet) {
+            C2D_Image img = C2D_SpriteSheetGetImage(activeDiffSheet, 0);
+            if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+        }
+        if (activeIconSheet) {
+            C2D_Image img = C2D_SpriteSheetGetImage(activeIconSheet, 0);
+            if (img.tex) C3D_TexSetFilter(img.tex, GPU_NEAREST, GPU_NEAREST);
+        }
+        if (activeAlbumSheet) {
+            C2D_Image img = C2D_SpriteSheetGetImage(activeAlbumSheet, 0);
+            if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+        }
+        if (activeAlbumTextSheet) {
+            C2D_Image img = C2D_SpriteSheetGetImage(activeAlbumTextSheet, 0);
+            if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
+        }
     }
 
     if (isExiting) {
@@ -601,7 +662,7 @@ void FreeplayState::update(float dt) {
                             icon.subtex = &defaultSubtex;
                         }
                         float iconScale = 1.5f;
-                        if (isCharacterIconMap[fs.info.icon] && icon.subtex) {
+                        if (activeIconIsChar && icon.subtex) {
                             iconScale = 70.0f / (float)icon.subtex->width;
                         }
                         float iconW = icon.subtex->width * iconScale;
@@ -840,11 +901,10 @@ void FreeplayState::update(float dt) {
                         icon.subtex = &defaultSubtex;
                     }
                     float iconScale = 1.5f;
-                    if (isCharacterIconMap[fs.info.icon] && icon.subtex) {
+                    if (activeIconIsChar && icon.subtex) {
                         iconScale = 70.0f / (float)icon.subtex->width;
                     }
                     float iconW = icon.subtex->width * iconScale;
-                    float iconH = icon.subtex->height * iconScale;
                     float defaultX = 320.0f - iconW - 15.0f;
                     float iconX = defaultX + iconEggXOffset;
                     
@@ -946,6 +1006,12 @@ void FreeplayState::update(float dt) {
 
     // Decay the difficulty displacement offset back to zero
     diffOffsetX += (0.0f - diffOffsetX) * (1.0f - exp2f(-12.0f * dt));
+
+    if (lastSelectedCheck != curSelected || lastDifficultyCheck != curDifficulty) {
+        lastSelectedCheck = curSelected;
+        lastDifficultyCheck = curDifficulty;
+        triggerAsyncLoad();
+    }
 }
 
 void FreeplayState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
@@ -1464,7 +1530,7 @@ void FreeplayState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
                     icon.subtex = &defaultSubtex;
                 }
                 float iconScale = 1.5f;
-                if (isCharacterIconMap[fs.info.icon] && icon.subtex) {
+                if (activeIconIsChar && icon.subtex) {
                     iconScale = 70.0f / (float)icon.subtex->width;
                 }
                 float iconW = icon.subtex->width * iconScale;
@@ -1617,11 +1683,27 @@ void FreeplayState::exitState() {
     if (arrowSheet) C2D_SpriteSheetFree(arrowSheet);
     arrowSheet = nullptr;
     
-    for (auto const& pair : diffCache) { if(pair.second.sheet) C2D_SpriteSheetFree(pair.second.sheet); }
-    diffCache.clear();
-    
-    for (auto const& pair : iconCache) { if(pair.second.sheet) C2D_SpriteSheetFree(pair.second.sheet); }
-    iconCache.clear();
+    threadRunning = false;
+    LightEvent_Signal(&loadEvent);
+    if (loadThread) {
+        threadJoin(loadThread, U64_MAX);
+        threadFree(loadThread);
+        loadThread = nullptr;
+    }
+
+    if (loadedDiffData.buffer) { linearFree(loadedDiffData.buffer); loadedDiffData.buffer = nullptr; }
+    if (loadedIconData.buffer) { linearFree(loadedIconData.buffer); loadedIconData.buffer = nullptr; }
+    if (loadedAlbumData.buffer) { linearFree(loadedAlbumData.buffer); loadedAlbumData.buffer = nullptr; }
+    if (loadedAlbumTextData.buffer) { linearFree(loadedAlbumTextData.buffer); loadedAlbumTextData.buffer = nullptr; }
+
+    if (activeDiffSheet) C2D_SpriteSheetFree(activeDiffSheet);
+    activeDiffSheet = nullptr;
+    if (activeIconSheet) C2D_SpriteSheetFree(activeIconSheet);
+    activeIconSheet = nullptr;
+    if (activeAlbumSheet) C2D_SpriteSheetFree(activeAlbumSheet);
+    activeAlbumSheet = nullptr;
+    if (activeAlbumTextSheet) C2D_SpriteSheetFree(activeAlbumTextSheet);
+    activeAlbumTextSheet = nullptr;
     
     if (highscoreSheet) C2D_SpriteSheetFree(highscoreSheet);
     highscoreSheet = nullptr;
@@ -1630,12 +1712,6 @@ void FreeplayState::exitState() {
     if (numbersSheet) C2D_SpriteSheetFree(numbersSheet);
     numbersSheet = nullptr;
     for (int i = 0; i < 10; i++) numberFrames[i].clear();
-
-    for (auto const& pair : albumCache) { if(pair.second.sheet) C2D_SpriteSheetFree(pair.second.sheet); }
-    albumCache.clear();
-    
-    for (auto const& pair : albumTextCache) { if(pair.second.sheet) C2D_SpriteSheetFree(pair.second.sheet); }
-    albumTextCache.clear();
 
     if (menuBgSheet) C2D_SpriteSheetFree(menuBgSheet);
     menuBgSheet = nullptr;
@@ -1673,29 +1749,8 @@ C2D_Image FreeplayState::getBfBackgroundImage() {
 }
 
 C2D_Image FreeplayState::getDifficultyImage(const std::string& name) {
-    if (diffCache.count(name)) {
-        diffCache[name].lastAccessFrame = cacheFrameCount;
-        return C2D_SpriteSheetGetImage(diffCache[name].sheet, 0);
-    }
-    
-    if (timeSinceSelectionChange < 0.10f) {
-        return {nullptr, nullptr};
-    }
-    
-    std::string path = Paths::image("freeplay/" + name, "preload");
-    if (!Paths::fileExists(path)) {
-        path = Paths::image("menudifficulties/placeholder", "preload");
-    }
-    if (Paths::fileExists(path)) {
-        C2D_SpriteSheet s = C2D_SpriteSheetLoad(path.c_str());
-        if (s) {
-            C2D_Image img = C2D_SpriteSheetGetImage(s, 0);
-            if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
-            
-            enforceLRUCache(diffCache, 10);
-            diffCache[name] = {s, cacheFrameCount};
-            return img;
-        }
+    if (activeDiffSheet && activeSongIndex == curSelected) {
+        return C2D_SpriteSheetGetImage(activeDiffSheet, 0);
     }
     return {nullptr, nullptr};
 }
@@ -1767,239 +1822,33 @@ void FreeplayState::updateDifficulties() {
 }
 
 C2D_Image FreeplayState::getIconImage(const std::string& name) {
-    if (name.empty()) return {nullptr, nullptr};
-    
-    static std::unordered_map<std::string, Tex3DS_SubTexture> customIconSubtexs;
-    if (iconCache.count(name)) {
-        iconCache[name].lastAccessFrame = cacheFrameCount;
-        if (!iconCache[name].sheet) return {nullptr, nullptr};
-        C2D_Image img = C2D_SpriteSheetGetImage(iconCache[name].sheet, 0);
-        if (img.tex) C3D_TexSetFilter(img.tex, GPU_NEAREST, GPU_NEAREST);
-        if (customIconSubtexs.count(name) > 0) {
-            img.subtex = &customIconSubtexs[name];
+    if (activeIconSheet && activeSongIndex == curSelected) {
+        C2D_Image img = C2D_SpriteSheetGetImage(activeIconSheet, 0);
+        if (activeIconIsChar && img.subtex != nullptr) {
+            static Tex3DS_SubTexture sub;
+            sub = *img.subtex;
+            float u0 = img.subtex->left;
+            float du = img.subtex->right - u0;
+            sub.width = img.subtex->width / 2;
+            sub.right = u0 + du * 0.5f;
+            img.subtex = &sub;
         }
         return img;
     }
-
-    // Debounce: don't search the SD card if we are scrolling fast
-    if (timeSinceSelectionChange < 0.10f) {
-        return {nullptr, nullptr};
-    }
-
-    std::string prevModFolder = ModHandler::get().currentModFolder;
-    if (!songs.empty() && curSelected >= 0 && curSelected < (int)songs.size()) {
-        std::string week = songs[curSelected].week;
-        if (WeekData::weeksLoaded.count(week) && WeekData::weeksLoaded[week].isMod) {
-            ModHandler::get().currentModFolder = WeekData::weeksLoaded[week].modFolder;
-        } else {
-            ModHandler::get().currentModFolder = "";
-        }
-    }
-
-    bool isCharacterIcon = false;
-    std::string path = Paths::image("freeplayIcons/" + name, "preload");
-    if (!Paths::fileExists(path)) {
-        path = Paths::healthIcon(name);
-        isCharacterIcon = true;
-    }
-    if (!Paths::fileExists(path)) {
-        path = Paths::image("freeplayIcons/placeholder", "preload");
-        isCharacterIcon = false;
-    }
-    if (!Paths::fileExists(path)) {
-        path = Paths::healthIcon("face");
-        isCharacterIcon = true;
-    }
-    ModHandler::get().currentModFolder = prevModFolder;
-    isCharacterIconMap[name] = isCharacterIcon;
-
-    if (Paths::fileExists(path)) {
-        C2D_SpriteSheet s = C2D_SpriteSheetLoad(path.c_str());
-        if (s) {
-            C2D_Image img = C2D_SpriteSheetGetImage(s, 0);
-            if (img.tex) C3D_TexSetFilter(img.tex, GPU_NEAREST, GPU_NEAREST);
-            
-            if (isCharacterIcon && img.subtex != nullptr) {
-                float u0 = img.subtex->left;
-                float u1 = img.subtex->right;
-                float v0 = img.subtex->top;
-                float v1 = img.subtex->bottom;
-                float fullW = (float)img.subtex->width;
-                float halfW = fullW * 0.5f;
-                float fullH = (float)img.subtex->height;
-                float du = u1 - u0;
-
-                Tex3DS_SubTexture sub;
-                sub.width  = (u16)halfW;
-                sub.height = (u16)fullH;
-                sub.left   = u0;
-                sub.right  = u0 + du * 0.5f;
-                sub.top    = v0;
-                sub.bottom = v1;
-
-                customIconSubtexs[name] = sub;
-                img.subtex = &customIconSubtexs[name];
-            }
-            
-            enforceLRUCache(iconCache, 30);
-            iconCache[name] = {s, cacheFrameCount};
-            return img;
-        }
-    }
-    
-    // Cache the failure so we don't query the SD card again
-    enforceLRUCache(iconCache, 30);
-    iconCache[name] = {nullptr, cacheFrameCount};
     return {nullptr, nullptr};
 }
 
 C2D_Image FreeplayState::getAlbumImage(const std::string& name) {
-    std::string targetName = name;
-    if (targetName.empty()) {
-        targetName = "placeholder";
+    if (activeAlbumSheet && activeSongIndex == curSelected) {
+        return C2D_SpriteSheetGetImage(activeAlbumSheet, 0);
     }
-
-    if (albumCache.count(targetName)) {
-        albumCache[targetName].lastAccessFrame = cacheFrameCount;
-        if (!albumCache[targetName].sheet) return {nullptr, nullptr};
-        return C2D_SpriteSheetGetImage(albumCache[targetName].sheet, 0);
-    }
-
-    // Debounce: don't search the SD card if we are scrolling fast
-    if (timeSinceSelectionChange < 0.10f) {
-        return {nullptr, nullptr};
-    }
-
-    currentAlbumName = targetName;
-    C2D_SpriteSheet albumSheet = nullptr;
-
-    std::string prevModFolder = ModHandler::get().currentModFolder;
-    std::string modFolder = "";
-
-    if (!songs.empty() && curSelected >= 0 && curSelected < (int)songs.size()) {
-        std::string week = songs[curSelected].week;
-        bool exists = WeekData::weeksLoaded.count(week) > 0;
-        bool isMod = exists && WeekData::weeksLoaded[week].isMod;
-        if (isMod) {
-            modFolder = WeekData::weeksLoaded[week].modFolder;
-        }
-        
-        // Fallback: If modFolder is empty, check where the song chart JSON resides
-        if (modFolder.empty()) {
-            std::string songNameLower = songs[curSelected].name;
-            std::transform(songNameLower.begin(), songNameLower.end(), songNameLower.begin(), ::tolower);
-            std::string chartPath = "data/" + songNameLower + "/" + songNameLower + ".json";
-            modFolder = ModHandler::get().getModFolderOfFile(chartPath);
-        }
-
-
-
-        if (!modFolder.empty()) {
-            ModHandler::get().currentModFolder = modFolder;
-        } else {
-            ModHandler::get().currentModFolder = "";
-        }
-    }
-
-    // 1. Try loading freeplay/album/targetName
-    if (targetName != "placeholder") {
-        std::string path = Paths::image("freeplay/album/" + targetName);
-        if (Paths::fileExists(path)) {
-            albumSheet = Paths_loadSpriteSheet(path.c_str());
-        }
-    }
-
-    // 2. Fallback to mod pack icon (pack.t3x or pack.rawtex)
-    if (!albumSheet && !modFolder.empty()) {
-        std::string bases[] = {
-            ModHandler::get().getWorkingBase(),
-            "sdmc:/SnakeEngine/",
-            "/SnakeEngine/",
-            "SnakeEngine/"
-        };
-        for (std::string base : bases) {
-            if (base.empty()) continue;
-            if (base.back() != '/') base += "/";
-            
-            std::string packPath = base + modFolder + "/pack.t3x";
-            if (Paths::fileExists(packPath)) {
-                albumSheet = Paths_loadSpriteSheet(packPath.c_str());
-                if (albumSheet) {
-                    break;
-                }
-            }
-            packPath = base + modFolder + "/pack.rawtex";
-            if (Paths::fileExists(packPath)) {
-                albumSheet = Paths_loadSpriteSheet(packPath.c_str());
-                if (albumSheet) {
-                    break;
-                }
-            }
-        }
-    }
-
-    // 3. Fallback to placeholder
-    if (!albumSheet) {
-        std::string path = Paths::image("freeplay/album/placeholder");
-        if (Paths::fileExists(path)) {
-            albumSheet = Paths_loadSpriteSheet(path.c_str());
-        }
-    }
-
-
-
-    ModHandler::get().currentModFolder = prevModFolder;
-
-    if (albumSheet) {
-        C2D_Image img = C2D_SpriteSheetGetImage(albumSheet, 0);
-        if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
-        
-        enforceLRUCache(albumCache, 5);
-        albumCache[targetName] = {albumSheet, cacheFrameCount};
-        
-        return img;
-    }
-
-    // Cache the failure
-    enforceLRUCache(albumCache, 5);
-    albumCache[targetName] = {nullptr, cacheFrameCount};
     return {nullptr, nullptr};
 }
 
 C2D_Image FreeplayState::getAlbumTextImage(const std::string& name) {
-    std::string targetName = name;
-    if (targetName.empty()) {
-        targetName = "placeholder";
+    if (activeAlbumTextSheet && activeSongIndex == curSelected) {
+        return C2D_SpriteSheetGetImage(activeAlbumTextSheet, 0);
     }
-    
-    std::string lookupName = targetName + "-text";
-    
-    if (albumTextCache.count(targetName)) {
-        albumTextCache[targetName].lastAccessFrame = cacheFrameCount;
-        if (!albumTextCache[targetName].sheet) return {nullptr, nullptr};
-        return C2D_SpriteSheetGetImage(albumTextCache[targetName].sheet, 0);
-    }
-    
-    // Debounce: don't search the SD card if we are scrolling fast
-    if (timeSinceSelectionChange < 0.10f) {
-        return {nullptr, nullptr};
-    }
-
-    std::string path = Paths::image("freeplay/album/" + lookupName);
-    if (Paths::fileExists(path)) {
-        C2D_SpriteSheet s = C2D_SpriteSheetLoad(path.c_str());
-        if (s) {
-            C2D_Image img = C2D_SpriteSheetGetImage(s, 0);
-            if (img.tex) C3D_TexSetFilter(img.tex, GPU_LINEAR, GPU_LINEAR);
-            
-            enforceLRUCache(albumTextCache, 5);
-            albumTextCache[targetName] = {s, cacheFrameCount};
-            return img;
-        }
-    }
-
-    enforceLRUCache(albumTextCache, 5);
-    albumTextCache[targetName] = {nullptr, cacheFrameCount};
     return {nullptr, nullptr};
 }
 
@@ -2324,6 +2173,233 @@ void FreeplayState::drawCategoryOrganizer(float topIntroY, float exitAlpha, floa
             C2D_AlphaImageTint(&tint, exitAlpha);
         }
         drawFrameCentered(curFrame, centerX, centerY + categoryBounceY, depth, &tint, baseScale * 1.25f, baseScale * 1.25f);
+    }
+}
+
+void FreeplayState::triggerAsyncLoad() {
+    if (songs.empty() || curSelected < 0 || curSelected >= (int)songs.size()) return;
+    
+    // Free old sheets immediately to show loading rects
+    if (activeDiffSheet) { C2D_SpriteSheetFree(activeDiffSheet); activeDiffSheet = nullptr; }
+    if (activeIconSheet) { C2D_SpriteSheetFree(activeIconSheet); activeIconSheet = nullptr; }
+    if (activeAlbumSheet) { C2D_SpriteSheetFree(activeAlbumSheet); activeAlbumSheet = nullptr; }
+    if (activeAlbumTextSheet) { C2D_SpriteSheetFree(activeAlbumTextSheet); activeAlbumTextSheet = nullptr; }
+    activeSongIndex = -1;
+    
+    // Set up request
+    AsyncLoadRequest req;
+    req.songIndex = curSelected;
+    
+    std::string diffName = "";
+    if (curDifficulty >= 0 && curDifficulty < (int)curWeekDiffs.size()) {
+        diffName = curWeekDiffs[curDifficulty];
+    } else {
+        diffName = "Normal";
+    }
+    req.difficultyName = diffName;
+    req.iconName = songs[curSelected].info.icon;
+    req.albumName = getAlbumNameForSelected();
+    req.songName = songs[curSelected].name;
+    req.week = songs[curSelected].week;
+
+    // 1. Difficulty sprite
+    {
+        std::string diffNameLower = diffName;
+        std::transform(diffNameLower.begin(), diffNameLower.end(), diffNameLower.begin(), ::tolower);
+        std::string p = Paths::image("freeplay/" + diffNameLower, "preload");
+        if (!Paths::fileExists(p))
+            p = Paths::image("menudifficulties/placeholder", "preload");
+        req.resolvedDiffPath = p;
+    }
+
+    // 2. Icon sprite
+    {
+        std::string iconName = req.iconName;
+        std::string p = Paths::image("freeplayIcons/" + iconName, "preload");
+        bool isChar = false;
+        if (!Paths::fileExists(p)) {
+            std::string prevMod = ModHandler::get().currentModFolder;
+            if (WeekData::weeksLoaded.count(req.week) && WeekData::weeksLoaded[req.week].isMod)
+                ModHandler::get().currentModFolder = WeekData::weeksLoaded[req.week].modFolder;
+            else
+                ModHandler::get().currentModFolder = "";
+            p = Paths::healthIcon(iconName);
+            isChar = true;
+            if (!Paths::fileExists(p)) { p = Paths::image("freeplayIcons/placeholder", "preload"); isChar = false; }
+            if (!Paths::fileExists(p)) { p = Paths::healthIcon("face"); isChar = true; }
+            ModHandler::get().currentModFolder = prevMod;
+        }
+        req.resolvedIconPath = p;
+        req.iconIsChar = isChar;
+    }
+
+    // 3. Album sprite
+    {
+        std::string albumName = req.albumName;
+        std::string modFolder = "";
+        if (WeekData::weeksLoaded.count(req.week) && WeekData::weeksLoaded[req.week].isMod)
+            modFolder = WeekData::weeksLoaded[req.week].modFolder;
+        if (modFolder.empty()) {
+            std::string songLower = req.songName;
+            std::transform(songLower.begin(), songLower.end(), songLower.begin(), ::tolower);
+            modFolder = ModHandler::get().getModFolderOfFile("data/" + songLower + "/" + songLower + ".json");
+        }
+
+        std::string albumPath = "";
+        bool albumFound = false;
+        if (albumName != "placeholder") {
+            albumPath = Paths::image("freeplay/album/" + albumName);
+            albumFound = Paths::fileExists(albumPath);
+        }
+        if (!albumFound && !modFolder.empty()) {
+            std::string bases[] = {
+                ModHandler::get().getWorkingBase(),
+                "sdmc:/SnakeEngine/",
+                "/SnakeEngine/",
+                "SnakeEngine/"
+            };
+            for (std::string base : bases) {
+                if (base.empty()) continue;
+                if (base.back() != '/') base += "/";
+                std::string p = base + modFolder + "/pack.t3x";
+                if (Paths::fileExists(p)) { albumPath = p; albumFound = true; break; }
+                p = base + modFolder + "/pack.rawtex";
+                if (Paths::fileExists(p)) { albumPath = p; albumFound = true; break; }
+            }
+        }
+        if (!albumFound)
+            albumPath = Paths::image("freeplay/album/placeholder");
+        req.resolvedAlbumPath = albumPath; // worker does the actual fread
+
+        // Album text sprite
+        std::string textPath = Paths::image("freeplay/album/" + albumName + "-text");
+        req.resolvedAlbumTextPath = Paths::fileExists(textPath) ? textPath : "";
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    // Send request to worker thread
+    LightLock_Lock(&loadLock);
+    currentRequest = req;
+    requestPending = true;
+    LightLock_Unlock(&loadLock);
+    
+    LightEvent_Signal(&loadEvent);
+}
+
+FreeplayState::LoadedRawData FreeplayState::loadRawFile(const std::string& path) {
+    LoadedRawData data;
+    if (path.empty()) return data;
+    FILE* f = fopen(path.c_str(), "rb");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        size_t size = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        void* buffer = linearAlloc(size);
+        if (buffer) {
+            uint8_t* ptr = (uint8_t*)buffer;
+            size_t remaining = size;
+            const size_t CHUNK_SIZE = 64 * 1024;
+            while (remaining > 0 && !requestPending && threadRunning) {
+                size_t toRead = (remaining < CHUNK_SIZE) ? remaining : CHUNK_SIZE;
+                if (fread(ptr, 1, toRead, f) != toRead) {
+                    linearFree(buffer);
+                    buffer = nullptr;
+                    break;
+                }
+                ptr += toRead;
+                remaining -= toRead;
+                svcSleepThread(100000LL); // 100 microseconds
+            }
+            if ((requestPending || !threadRunning) && buffer) {
+                linearFree(buffer);
+                buffer = nullptr;
+            }
+            if (buffer) {
+                GSPGPU_FlushDataCache(buffer, size);
+                data.buffer = buffer;
+                data.size = size;
+                data.path = path;
+            }
+        }
+        fclose(f);
+    }
+    return data;
+}
+
+void FreeplayState::threadMain(void* arg) {
+    FreeplayState* state = (FreeplayState*)arg;
+    while (state->threadRunning) {
+        LightLock_Lock(&state->loadLock);
+        if (!state->requestPending) {
+            LightLock_Unlock(&state->loadLock);
+            LightEvent_Wait(&state->loadEvent);
+            continue;
+        }
+        // Copy the request (paths already resolved by the main thread)
+        AsyncLoadRequest req = state->currentRequest;
+        state->requestPending = false;
+        LightLock_Unlock(&state->loadLock);
+
+        // Free any previously loaded but unconsumed raw buffers (just in case)
+        if (state->loadedDiffData.buffer) { linearFree(state->loadedDiffData.buffer); state->loadedDiffData.buffer = nullptr; }
+        if (state->loadedIconData.buffer) { linearFree(state->loadedIconData.buffer); state->loadedIconData.buffer = nullptr; }
+        if (state->loadedAlbumData.buffer) { linearFree(state->loadedAlbumData.buffer); state->loadedAlbumData.buffer = nullptr; }
+        if (state->loadedAlbumTextData.buffer) { linearFree(state->loadedAlbumTextData.buffer); state->loadedAlbumTextData.buffer = nullptr; }
+
+        if (state->requestPending || !state->threadRunning) continue;
+
+        // 1. Load difficulty sprite (path pre-resolved on main thread) I NEED TO CHANGE THIS
+        LoadedRawData diffData = state->loadRawFile(req.resolvedDiffPath);
+        if (state->requestPending || !state->threadRunning) {
+            if (diffData.buffer) linearFree(diffData.buffer);
+            continue;
+        }
+
+        // 2. Load icon sprite (path pre-resolved on main thread) I NEED TO CHANGE THIS
+        LoadedRawData iconData = state->loadRawFile(req.resolvedIconPath);
+        if (state->requestPending || !state->threadRunning) {
+            if (diffData.buffer) linearFree(diffData.buffer);
+            if (iconData.buffer) linearFree(iconData.buffer);
+            continue;
+        }
+
+        // 3. Load album sprite (path pre-resolved on main thread) I NEED TO CHANGE THIS
+        LoadedRawData albumData = state->loadRawFile(req.resolvedAlbumPath);
+        if (state->requestPending || !state->threadRunning) {
+            if (diffData.buffer) linearFree(diffData.buffer);
+            if (iconData.buffer) linearFree(iconData.buffer);
+            if (albumData.buffer) linearFree(albumData.buffer);
+            continue;
+        }
+
+        // 4. Load album text sprite (path pre-resolved on main thread, may be empty) I NEED TO CHANGE THIS
+        LoadedRawData albumTextData;
+        if (!req.resolvedAlbumTextPath.empty()) {
+            albumTextData = state->loadRawFile(req.resolvedAlbumTextPath);
+            if (state->requestPending || !state->threadRunning) {
+                if (diffData.buffer) linearFree(diffData.buffer);
+                if (iconData.buffer) linearFree(iconData.buffer);
+                if (albumData.buffer) linearFree(albumData.buffer);
+                if (albumTextData.buffer) linearFree(albumTextData.buffer);
+                continue;
+            }
+        }
+
+        // All loaded — hand results back to main thread I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS I NEED TO CHANGE THIS
+        LightLock_Lock(&state->loadLock);
+        state->loadedDiffData = diffData;
+        state->loadedIconData = iconData;
+        state->loadedAlbumData = albumData;
+        state->loadedAlbumTextData = albumTextData;
+        state->loadedIconIsChar = req.iconIsChar;
+        
+        state->loadedDiffName = req.difficultyName;
+        state->loadedIconName = req.iconName;
+        state->loadedAlbumName = req.albumName;
+        state->loadedSongIndex = req.songIndex;
+        
+        state->loadCompleted = true;
+        LightLock_Unlock(&state->loadLock);
     }
 }
 

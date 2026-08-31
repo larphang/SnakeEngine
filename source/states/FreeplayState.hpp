@@ -1,4 +1,5 @@
 #pragma once
+#include <3ds.h>
 #include "../backend/MusicBeatState.hpp"
 #include "../backend/WeekData.hpp"
 #include "SparrowParser.hpp"
@@ -50,12 +51,9 @@ private:
     C2D_Image getBfBackgroundImage();
     
     // UI and difficulty sprites
-    std::unordered_map<std::string, SpriteCacheEntry> diffCache;
-    
     C2D_Image getDifficultyImage(const std::string& name);
 
     // Icon Cache for Freeplay Songs list
-    std::unordered_map<std::string, SpriteCacheEntry> iconCache;
     C2D_Image getIconImage(const std::string& name);
     
     // Song capsule sprite with scrolling text
@@ -104,8 +102,6 @@ private:
     int targetScore = 0;
 
     // Album Art
-    std::unordered_map<std::string, SpriteCacheEntry> albumCache;
-    std::unordered_map<std::string, SpriteCacheEntry> albumTextCache;
     C2D_SpriteSheet menuBgSheet = nullptr;
     std::string currentAlbumName;
     C2D_Image getAlbumImage(const std::string& name);
@@ -181,6 +177,65 @@ private:
 
     C2D_SpriteSheet letterStuffSheet = nullptr;
     std::vector<Frame> letterStuffFrames;
+
+    // Background loading structures and thread state
+    struct AsyncLoadRequest {
+        std::string difficultyName;
+        std::string iconName;
+        std::string albumName;
+        std::string songName;
+        std::string week;
+        int songIndex;
+        // Pre-resolved absolute paths (resolved on the main thread to avoid
+        // sdmc opendir() races from the worker thread)
+        std::string resolvedDiffPath;
+        std::string resolvedIconPath;
+        std::string resolvedAlbumPath;
+        std::string resolvedAlbumTextPath;
+        bool iconIsChar = false;
+    };
+
+    struct LoadedRawData {
+        void* buffer = nullptr;
+        size_t size = 0;
+        std::string path;
+    };
+
+    Thread loadThread = nullptr;
+    LightLock loadLock;
+    LightEvent loadEvent;
+    volatile bool threadRunning = false;
+    volatile bool requestPending = false;
+
+    AsyncLoadRequest currentRequest;
+
+    // Loaded buffers to be consumed by the main thread:
+    volatile bool loadCompleted = false;
+    std::string loadedDiffName;
+    std::string loadedIconName;
+    std::string loadedAlbumName;
+    int loadedSongIndex = -1;
+    bool loadedIconIsChar = false;
+
+    LoadedRawData loadedDiffData;
+    LoadedRawData loadedIconData;
+    LoadedRawData loadedAlbumData;
+    LoadedRawData loadedAlbumTextData;
+
+    // Active assets currently used for drawing
+    C2D_SpriteSheet activeDiffSheet = nullptr;
+    C2D_SpriteSheet activeIconSheet = nullptr;
+    C2D_SpriteSheet activeAlbumSheet = nullptr;
+    C2D_SpriteSheet activeAlbumTextSheet = nullptr;
+    bool activeIconIsChar = false;
+    int activeSongIndex = -1;
+
+    int lastSelectedCheck = -1;
+    int lastDifficultyCheck = -1;
+
+    void triggerAsyncLoad();
+    LoadedRawData loadRawFile(const std::string& path);
+    static void threadMain(void* arg);
 
     void rebuildCategories();
     void applyCategoryFilter(bool keepSelection = false);

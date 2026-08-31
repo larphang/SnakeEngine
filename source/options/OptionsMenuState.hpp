@@ -44,6 +44,7 @@ private:
     bool isBinding   = false;
     int  bindingLane = 0;
     int  bindingIdx  = 0;
+    float controlScrollY = 0.0f;
 
     // Note Colors: which note is being edited (0-3)
     int colorNoteSelected = 0;

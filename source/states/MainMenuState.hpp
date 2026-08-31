@@ -45,6 +45,20 @@ private:
     float transitionTimer = 0.0f;
     float introTimer = 0.0f;
 
+    // Confirm animation
+    bool selectedSomething = false;
+    float confirmTimer = 0.0f;
+    float flickerTimer = 0.0f;
+    bool flickerVisible = true;
+    float itemFadeTimers[6];
+    float itemAlphas[6];
+
+    // BG magenta
+    bool bgMagentaActive = false;
+    float bgMagentaTimer = 0.0f;
+    float bgFlickerTimer = 0.0f;
+    bool bgFlickerVisible = false;
+
 public:
     static bool comingFromFreeplay;
 };

@@ -50,9 +50,9 @@ RSF    := template.rsf
 ICON   := homemenu/icon.png
 endif
 BUILD		:=	build
-SOURCES		:=	source source/backend source/backend/codecs source/backend/savedata source/backend/parsers source/shaders source/objects source/states source/substates source/options source/debug $(3DS_LIBS_SRC) $(3DS_LIBS_SRC)/renderable $(3DS_LIBS_SRC)/audio
+SOURCES		:=	source source/backend source/backend/codecs source/backend/savedata source/backend/parsers source/shaders source/objects source/states source/substates source/options source/debug source/editors $(3DS_LIBS_SRC) $(3DS_LIBS_SRC)/renderable $(3DS_LIBS_SRC)/audio
 DATA		:=	data
-INCLUDES	:=	include source source/backend source/backend/codecs source/backend/savedata source/backend/parsers source/shaders source/objects source/states source/substates source/options source/debug $(3DS_LIBS_INC) $(3DS_LIBS_INC)/renderable $(3DS_LIBS_INC)/audio
+INCLUDES	:=	include source source/backend source/backend/codecs source/backend/savedata source/backend/parsers source/shaders source/objects source/states source/substates source/options source/debug source/editors $(3DS_LIBS_INC) $(3DS_LIBS_INC)/renderable $(3DS_LIBS_INC)/audio
 GRAPHICS	:=	gfx gfx/stages gfx/characters
 #GFXBUILD	:=	$(BUILD)
 GFXBUILD	:=	$(ROMFS)/gfx

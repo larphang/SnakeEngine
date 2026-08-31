@@ -53,6 +53,13 @@ unsigned int ClientPrefs::noteKeys[4][2] = {
     {KEY_DRIGHT, KEY_A}
 };
 
+unsigned int ClientPrefs::actionKeys[4] = {
+    KEY_L,
+    KEY_R,
+    KEY_ZL,
+    KEY_ZR
+};
+
 unsigned char ClientPrefs::noteColors[4][3] = {
     {255, 100, 255}, // Left
     {100, 255, 255}, // Down
@@ -156,6 +163,16 @@ void ClientPrefs::loadSettings() {
                         noteKeys[i][j] = (unsigned int)json_integer_value(kVal);
                     }
                 }
+            }
+        }
+    }
+
+    val = json_object_get(root, "actionKeys");
+    if (val && json_is_array(val)) {
+        for (int i = 0; i < 4; i++) {
+            json_t *kVal = json_array_get(val, i);
+            if (kVal && json_is_integer(kVal)) {
+                actionKeys[i] = (unsigned int)json_integer_value(kVal);
             }
         }
     }
@@ -272,6 +289,12 @@ void ClientPrefs::saveSettings() {
         json_array_append_new(keysArr, sub);
     }
     json_object_set_new(root, "noteKeys", keysArr);
+
+    json_t *actionsArr = json_array();
+    for (int i = 0; i < 4; i++) {
+        json_array_append_new(actionsArr, json_integer(actionKeys[i]));
+    }
+    json_object_set_new(root, "actionKeys", actionsArr);
     
     json_t *colorsArr = json_array();
     for (int i = 0; i < 4; i++) {

@@ -1,4 +1,4 @@
-v2.6.7
+v3.6.8
 - Some fixes were made
 - Game Over was finally added
 - The ogg files of the base game were converted to adp for better performance
@@ -6,15 +6,26 @@ v2.6.7
 - Improved the source files organization
 - Fixed a memory leak with NoteSkins
 - A vertical offset in the Sustains, which increased depending on the length, was corrected
-- Week 6 stage was added (excep thorns)
 - Antialiasing now works on icons
 - Fixed inconsistent dance for characters
-- Improved the Hex Color parser
+- Improved the Hex Color parser (But its still needs to be fixed)
 - A stutter on the title screen when performing the action to go to the main menu has been fixed
 - The Playstate text buffer was expanded from 512 to 2048 (Or in other words, you can now have up to 2048 letters from a font)
 - Another fix with songs charts speed
 - Gold P rank was added
 - Official achievements were added (Psych ones were removed)
+- Added support for spritemaps
+- Added the character editor
+- Tutorial was fixed
+- The quality of week 1 was improved
+- Week 4 was fixed and also the quality was improved
+- Week 6 was fixed
+- Custom keybindings are now working
+- You can now use L, R, ZL and ZR for keybinds
+- Action 1, 2, 3 and 4 were added on keybinds
+- Freeplay stability was improved (Kinda)
+- Options Menu colors were changed to match the original game and not psych's one
+- Note Colors Menu was remade
 
 v2.5.7
 - Fixed a crash with change character, but not tested

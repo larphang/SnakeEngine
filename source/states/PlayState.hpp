@@ -141,6 +141,7 @@ public:
     float getLaneDirection(int lane, bool isPlayer);
 
     void triggerEvent(const Event& event);
+
     bool showGrid = true;
     bool scoreTxtVisible = true;
     bool timeTxtVisible = true;
@@ -455,6 +456,7 @@ private:
     std::vector<NoteSprite> fastNoteSubtexs; // [0]=note, [1]=tail, [2]=noteholdend
     SongData songData;
     int curSection = -1;
+    std::string lastCameraFocus = "";
     size_t nextNoteIndex = 0;
     size_t nextEventIndex = 0;
     

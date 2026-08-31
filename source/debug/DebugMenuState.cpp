@@ -5,6 +5,8 @@
 #include "ImageViewerState.hpp"
 #include "EggRoomState.hpp"
 #include "ResultState.hpp"
+#include "../editors/CharacterEditorState.hpp"
+
 #include "../backend/AudioEngine.hpp"
 #include <math.h>
 #include <sys/stat.h>
@@ -57,6 +59,8 @@ void DebugMenuState::init() {
     menuItems.push_back({"Result: GOOD", "Test Result: GOOD rank", 7});
     menuItems.push_back({"Result: GREAT", "Test Result: GREAT rank", 8});
     menuItems.push_back({"Result: LOSS", "Test Result: LOSS rank", 9});
+    menuItems.push_back({"Character Editor", "Edit and test character offsets", 10});
+
 }
 
 void DebugMenuState::update(float dt) {
@@ -94,6 +98,7 @@ void DebugMenuState::update(float dt) {
             case 7: switchState(new ResultState(false, true, "Test Song", "Normal", 100, 50, 50, 15, 0, 1, 0, 700000)); break;
             case 8: switchState(new ResultState(false, true, "Test Song", "Normal", 100, 80, 75, 10, 1, 0, 0, 850000)); break;
             case 9: switchState(new ResultState(false, true, "Test Song", "Normal", 100, 10, 10, 10, 5, 5, 20, 200000)); break;
+            case 10: switchState(new CharacterEditorState()); break;
         }
     }
 }

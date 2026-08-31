@@ -23,11 +23,13 @@ public:
 
         std::string strippedPath = path;
         std::string library = "";
-        if (strippedPath.find("shared/images/") == 0) {
-            strippedPath = strippedPath.substr(14);
+        if (strippedPath.find("shared/images/") != std::string::npos) {
+            size_t idx = strippedPath.find("shared/images/");
+            strippedPath = strippedPath.substr(idx + 14);
             library = "shared";
-        } else if (strippedPath.find("preload/images/") == 0) {
-            strippedPath = strippedPath.substr(15);
+        } else if (strippedPath.find("preload/images/") != std::string::npos) {
+            size_t idx = strippedPath.find("preload/images/");
+            strippedPath = strippedPath.substr(idx + 15);
             library = "preload";
         } else if (strippedPath.find("images/") == 0) {
             strippedPath = strippedPath.substr(7);

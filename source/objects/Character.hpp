@@ -6,6 +6,7 @@
 #include <map>
 
 #include "SparrowParser.hpp"
+#include "CppAnimate.hpp"
 
 
 struct CharCacheHeader {
@@ -53,6 +54,8 @@ public:
     bool isPlaceholder = false;
     
     // JSON properties
+    std::string imagePath = "";
+    bool isSpritemap = false;
     float charScale = 6.0f;
     bool flipX = false;
     bool noAntialiasing = false;
@@ -108,6 +111,7 @@ public:
     static CharacterData* parseDataAsync(const std::string& charName);
     static bool loadFromCache(const std::string& path, CharacterData* data);
     static void saveToCache(const std::string& path, CharacterData* data, const std::string& imagePath);
+    void saveToPsychJson(const std::string& path);
     void instantiateFromData(CharacterData* data);
     
     void playAnim(const std::string& animName, bool forced = false);
@@ -118,6 +122,7 @@ public:
 
     bool hasAnimation(const std::string& animName);
     void setAntialiasing(bool antialiased);
+    void setAnimLoop(const std::string& animName, bool loop);
 
     float charScale = 1.0f;
     float charScaleX = 1.0f;
@@ -152,6 +157,12 @@ public:
     std::string curCharacterName = "";
     std::string charTexturePath = "";
     C2D_SpriteSheet sheet; 
+    bool isSpritemap = false;
+    CppAnimate spritemapAnim;
+    bool isHighlighted = false;
+    friend class CharacterEditorState;
+
+    std::map<std::string, Animation> animations;
 
 private:
     void* fileBuffer = nullptr;
@@ -159,7 +170,6 @@ private:
     C3D_Tex* rawTex = nullptr;
     Tex3DS_SubTexture* rawSub = nullptr;
     std::vector<Frame> frames;
-    std::map<std::string, Animation> animations;
     
     int curFrame = 0;
     float frameTimer = 0;

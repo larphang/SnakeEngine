@@ -306,8 +306,10 @@ void TitleState::update(float dt) {
                         MusicPlayer::stop();
                         transitioning = true;
                         switchTimer = 0.5f;
-                        flash(topScreen, 1.0f, CWhite);
-                        flash(bottomScreen, 1.0f, CWhite);
+                        if (ClientPrefs::flashing) {
+                            flash(topScreen, 1.0f, CWhite);
+                            flash(bottomScreen, 1.0f, CWhite);
+                        }
                     }
                     break;
                 }
@@ -324,8 +326,10 @@ void TitleState::update(float dt) {
                 switchTimer = 2.0f;
                 titleEnter.play("press");
                 titleEnter2.play("press");
-                flash(topScreen, 1.0f, CWhite);
-                flash(bottomScreen, 1.0f, CWhite);
+                if (ClientPrefs::flashing) {
+                    flash(topScreen, 1.0f, CWhite);
+                    flash(bottomScreen, 1.0f, CWhite);
+                }
             }
         }
     }
@@ -447,8 +451,10 @@ void TitleState::skipIntro() {
         introLines.clear();
         showNewgrounds = false;
 
-        flash(topScreen, 1.0f, CWhite);
-        flash(bottomScreen, 1.0f, CWhite);
+        if (ClientPrefs::flashing) {
+            flash(topScreen, 1.0f, CWhite);
+            flash(bottomScreen, 1.0f, CWhite);
+        }
 
         promoTimer = 40.0f;
         promoPending = true;
@@ -457,3 +463,24 @@ void TitleState::skipIntro() {
 
 void TitleState::exitState() {
 }
+
+
+//               Come, sit with me,
+//                  And watch the sky.         *
+//                The stars are bright,
+//              The moon is high.
+//                    *               *                          *
+//      *      Don't be afraid,
+//           Don't ask me why.
+//            Just stay with me
+//           A little while.    *          *
+// *             *                                    *
+//                   Look at the moon,
+//                             How close it seems.               *
+//       *                                  Maybe tomorrow
+//                   *                 We'll wake from this dream.
+//                             *
+//       *                     So count the stars,
+//                         One by one...
+//         And when they're gone,               *
+//                 We'll wait for dawn.......

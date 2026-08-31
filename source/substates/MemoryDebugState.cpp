@@ -1,5 +1,6 @@
 #include "MemoryDebugState.hpp"
 #include <malloc.h>
+#include <set>
 #include "../states/PlayState.hpp"
 #include "../backend/savedata/ClientPrefs.hpp"
 #include "../backend/SpritesheetCache.hpp"
@@ -55,12 +56,21 @@ static bool isVRAM(void* ptr) {
 
 void MemoryDebugState::gatherAllMemoryItems() {
     memoryItems.clear();
+    std::set<void*> addedTexData;
 
     auto addTex = [&](const std::string& name, C3D_Tex* tex) {
         if (!tex) return;
         MemoryItem item;
         item.name = name;
-        item.size = getTexSize(tex);
+        if (tex->data && addedTexData.count(tex->data) > 0) {
+            item.size = 0;
+            item.name += " (Shared)";
+        } else {
+            item.size = getTexSize(tex);
+            if (tex->data) {
+                addedTexData.insert(tex->data);
+            }
+        }
         item.isVram = isVRAM(tex->data);
         memoryItems.push_back(item);
     };

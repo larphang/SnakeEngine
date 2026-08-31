@@ -24,8 +24,14 @@ static bool hasCopiedColor = false;
 
 static void drawBG(C2D_Image img, bool valid, float w, float h) {
     if (valid) {
+        // Re-apply filter every frame: other C3D_TexSetFilter calls (checkboxanim,
+        // noteSprites, etc.) can overwrite it after init() set it.
+        if (img.tex) {
+            GPU_TEXTURE_FILTER_PARAM f = ClientPrefs::globalAntialiasing ? GPU_LINEAR : GPU_NEAREST;
+            C3D_TexSetFilter(img.tex, f, f);
+        }
         C2D_ImageTint tint;
-        C2D_PlainImageTint(&tint, C2D_Color32(39, 71, 220, 255), 1.0f);
+        C2D_PlainImageTint(&tint, C2D_Color32(159, 42, 73, 255), 1.0f);
         drawCenteredBG(img, w, h, 0.1f, &tint);
     }
 }
@@ -434,10 +440,14 @@ std::string OptionsMenuState::getKeyName(unsigned int key) {
         case KEY_B:      return "B";
         case KEY_X:      return "X";
         case KEY_Y:      return "Y";
-        case KEY_DLEFT:  return "D-Left";
-        case KEY_DRIGHT: return "D-Right";
-        case KEY_DUP:    return "D-Up";
-        case KEY_DDOWN:  return "D-Down";
+        case KEY_DLEFT:  return "D Left";
+        case KEY_DRIGHT: return "D Right";
+        case KEY_DUP:    return "D Up";
+        case KEY_DDOWN:  return "D Down";
+        case KEY_L:      return "L";
+        case KEY_R:      return "R";
+        case KEY_ZL:     return "ZL";
+        case KEY_ZR:     return "ZR";
         default:         return "None";
     }
 }
@@ -790,6 +800,14 @@ void OptionsMenuState::update(float dt) {
 
     // CONTROLS
     else if (menuState == STATE_CONTROLS) {
+        bool isNew3DS = false;
+        APT_CheckNew3DS(&isNew3DS);
+        int totalSelections = isNew3DS ? 12 : 10;
+
+        int selRow = (curSelected < 8) ? (curSelected / 2) : (4 + (curSelected - 8));
+        float targetScroll = 100.0f - selRow * 40.0f;
+        controlScrollY += (targetScroll - controlScrollY) * (1.0f - exp2f(-12.0f * dt));
+
         if (!isBinding) {
             if (keyJustPressed(KEY_B)) {
                 AudioEngine::playSound("romfs:/preload/sounds/cancelMenu.ogg", 0.7f);
@@ -798,27 +816,55 @@ void OptionsMenuState::update(float dt) {
                 return;
             }
             if (kDown & (KEY_DUP | KEY_CPAD_UP)) {
-                curSelected -= 2;
-                if (curSelected < 0) curSelected += 8;
+                if (curSelected < 8) {
+                    if (curSelected <= 1) {
+                        curSelected = totalSelections - 1;
+                    } else {
+                        curSelected -= 2;
+                    }
+                } else if (curSelected == 8) {
+                    curSelected = 6;
+                } else {
+                    curSelected -= 1;
+                }
                 AudioEngine::playSound("romfs:/preload/sounds/scrollMenu.ogg", 0.7f);
             }
             if (kDown & (KEY_DDOWN | KEY_CPAD_DOWN)) {
-                curSelected += 2;
-                if (curSelected >= 8) curSelected -= 8;
+                if (curSelected < 8) {
+                    if (curSelected >= 6) {
+                        curSelected = 8;
+                    } else {
+                        curSelected += 2;
+                    }
+                } else {
+                    curSelected += 1;
+                    if (curSelected >= totalSelections) {
+                        curSelected = 0;
+                    }
+                }
                 AudioEngine::playSound("romfs:/preload/sounds/scrollMenu.ogg", 0.7f);
             }
             if (kDown & (KEY_DLEFT | KEY_CPAD_LEFT)) {
-                if (curSelected % 2 == 1) curSelected--;
-                AudioEngine::playSound("romfs:/preload/sounds/scrollMenu.ogg", 0.7f);
+                if (curSelected < 8 && curSelected % 2 == 1) {
+                    curSelected--;
+                    AudioEngine::playSound("romfs:/preload/sounds/scrollMenu.ogg", 0.7f);
+                }
             }
             if (kDown & (KEY_DRIGHT | KEY_CPAD_RIGHT)) {
-                if (curSelected % 2 == 0) curSelected++;
-                AudioEngine::playSound("romfs:/preload/sounds/scrollMenu.ogg", 0.7f);
+                if (curSelected < 8 && curSelected % 2 == 0) {
+                    curSelected++;
+                    AudioEngine::playSound("romfs:/preload/sounds/scrollMenu.ogg", 0.7f);
+                }
             }
             if (kDown & (KEY_A | KEY_START)) {
                 isBinding   = true;
-                bindingLane = curSelected / 2;
-                bindingIdx  = curSelected % 2;
+                if (curSelected < 8) {
+                    bindingLane = curSelected / 2;
+                    bindingIdx  = curSelected % 2;
+                } else {
+                    bindingLane = 4 + (curSelected - 8);
+                    bindingIdx  = 0;
+                }
                 AudioEngine::playSound("romfs:/preload/sounds/confirmMenu.ogg", 0.7f);
             }
         } else {
@@ -829,11 +875,19 @@ void OptionsMenuState::update(float dt) {
             }
             static const unsigned int ALLOWED_KEYS[] = {
                 KEY_A, KEY_B, KEY_X, KEY_Y,
-                KEY_DUP, KEY_DDOWN, KEY_DLEFT, KEY_DRIGHT
+                KEY_DUP, KEY_DDOWN, KEY_DLEFT, KEY_DRIGHT,
+                KEY_L, KEY_R, KEY_ZL, KEY_ZR
             };
             for (unsigned int key : ALLOWED_KEYS) {
                 if (keyJustPressed(key)) {
-                    ClientPrefs::noteKeys[bindingLane][bindingIdx] = key;
+                    if (bindingLane < 4) {
+                        ClientPrefs::noteKeys[bindingLane][bindingIdx] = key;
+                    } else {
+                        int actIdx = bindingLane - 4;
+                        if (actIdx >= 0 && actIdx < 4) {
+                            ClientPrefs::actionKeys[actIdx] = key;
+                        }
+                    }
                     isBinding = false;
                     AudioEngine::playSound("romfs:/preload/sounds/confirmMenu.ogg", 0.7f);
                     break;
@@ -955,7 +1009,7 @@ void OptionsMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
     auto& categories = OptionManager::get().getCategories();
 
     C2D_SceneBegin(top);
-    C2D_TargetClear(top, C2D_Color32(123, 92, 224, 255));
+    C2D_TargetClear(top, C2D_Color32(182, 91, 138, 255));
     drawBG(topBG, bgSheet != nullptr, 400.0f, 240.0f);
 
     // Grid overlay for controls and note colors
@@ -1089,7 +1143,7 @@ void OptionsMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
     }
 
     C2D_SceneBegin(bottom);
-    C2D_TargetClear(bottom, C2D_Color32(123, 92, 224, 255));
+    C2D_TargetClear(bottom, C2D_Color32(182, 91, 138, 255));
     drawBG(bottomBG, bottomBGSheet != nullptr, 320.0f, 240.0f);
 
     if (menuState == STATE_MAIN) {
@@ -1185,31 +1239,63 @@ void OptionsMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
             }
         }
 
-        static const char* noteNames[] = {"LEFT","DOWN","UP","RIGHT"};
+        bool isNew3DS = false;
+        APT_CheckNew3DS(&isNew3DS);
+        int totalLanes = isNew3DS ? 8 : 6; // 4 notes + 2 o 4 acts
+
+        static const char* noteNames[] = {"LEFT","DOWN","UP","RIGHT","ACT 1","ACT 2","ACT 3","ACT 4"};
         float rowH = 40.0f;
-        float bh = rowH;
-        for (int lane = 0; lane < 4; lane++) {
-            float y = 30.0f + lane * rowH;
-            bool isCurrentLane = (curSelected / 2 == lane);
+        float bh = 32.0f;
 
-            Alphabet::draw(noteNames[lane], 20.0f, y + (bh - 28.0f) / 2.0f, 1.2f,
-                           isCurrentLane ? 1.0f : 0.6f, false);
+        for (int lane = 0; lane < totalLanes; lane++) {
+            float y = controlScrollY + lane * rowH;
+            if (y < -40.0f || y > 240.0f) continue; // Skip rendering off-screen rows
 
-            for (int keyIdx = 0; keyIdx < 2; keyIdx++) {
-                int i = lane * 2 + keyIdx;
-                bool sel = (i == curSelected);
+            bool isCurrentLane = false;
+            if (curSelected < 8) {
+                isCurrentLane = (curSelected / 2 == lane);
+            } else {
+                isCurrentLane = (4 + (curSelected - 8) == lane);
+            }
 
-                float bx = (keyIdx == 0) ? 130.0f : 210.0f;
-                float bw = 70.0f;
+            // Draw action name
+            Alphabet::draw(noteNames[lane], 20.0f, y + 6.0f, 1.1f,
+                           isCurrentLane ? 1.0f : 0.5f, false);
 
-                u32 boxCol = sel ? (isBinding ? C2D_Color32(220, 50, 50, 255)
-                                              : C2D_Color32(255, 255, 255, 255))
+            if (lane < 4) {
+                // Render note keybind boxes
+                for (int keyIdx = 0; keyIdx < 2; keyIdx++) {
+                    int idx = lane * 2 + keyIdx;
+                    bool sel = (idx == curSelected);
+
+                    float bx = (keyIdx == 0) ? 140.0f : 225.0f;
+                    float bw = 75.0f;
+
+                    u32 boxCol = sel ? (isBinding ? C2D_Color32(220, 50, 50, 160)
+                                                  : C2D_Color32(255, 255, 255, 160))
+                                     : C2D_Color32(0, 0, 0, 160);
+                    C2D_DrawRectSolid(bx, y + (rowH - bh) / 2.0f, 0.16f, bw, bh, boxCol);
+
+                    std::string kName = getKeyName(ClientPrefs::noteKeys[lane][keyIdx]);
+                    // Draw keybind
+                    Alphabet::draw(kName, bx + bw / 2.0f, y + 12.0f, 0.65f, sel ? 1.0f : 0.6f, true, 0xFFFFFFFF);
+                }
+            } else {
+                // Render action keybind box (single column)
+                int actIdx = lane - 4;
+                bool sel = (curSelected == 8 + actIdx);
+
+                float bx = 140.0f;
+                float bw = 75.0f;
+
+                u32 boxCol = sel ? (isBinding ? C2D_Color32(220, 50, 50, 160)
+                                              : C2D_Color32(255, 255, 255, 160))
                                  : C2D_Color32(0, 0, 0, 160);
-                C2D_DrawRectSolid(bx, y, 0.16f, bw, bh, boxCol);
+                C2D_DrawRectSolid(bx, y + (rowH - bh) / 2.0f, 0.16f, bw, bh, boxCol);
 
-                std::string kName = getKeyName(ClientPrefs::noteKeys[lane][keyIdx]);
-                u32 txtCol = sel ? (isBinding ? 0xFFFFFFFF : 0xFF000000) : 0xFFFFFFFF;
-                AddTextCentered(kName, bx + bw / 2.0f, y + (bh - 14.0f) / 2.0f, 0.35f, 1.0f, txtCol, bw);
+                std::string kName = getKeyName(ClientPrefs::actionKeys[actIdx]);
+                // Draw keybind
+                Alphabet::draw(kName, bx + bw / 2.0f, y + 12.0f, 0.65f, sel ? 1.0f : 0.6f, true, 0xFFFFFFFF);
             }
         }
     }
@@ -1309,4 +1395,5 @@ void OptionsMenuState::exitState() {
     if (noteSheetFast) C2D_SpriteSheetFree(noteSheetFast);
     if (colorWheelSheet) C2D_SpriteSheetFree(colorWheelSheet);
     if (copyPasteSheet) C2D_SpriteSheetFree(copyPasteSheet);
+    if (vcrFontBuf) C2D_TextBufDelete(vcrFontBuf);
 }

@@ -25,6 +25,7 @@ public:
     static int noteOffset;
     static bool noteColorsEnabled;
     static unsigned int noteKeys[4][2];
+    static unsigned int actionKeys[4];
     static unsigned char noteColors[4][3];
     
     static bool drawGrid;

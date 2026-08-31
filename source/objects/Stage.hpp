@@ -30,6 +30,7 @@ struct StageSprite {
     float graphicHeight = 0.0f;
     bool antialiasing = true;
     int zOrder = 0;
+    float depth = -1.0f;
 
     // Animation support
     bool animated = false;

@@ -86,6 +86,20 @@ void MainMenuState::init() {
     } else {
         introTimer = 1.0f;
     }
+
+    // Init confirm animation state
+    selectedSomething = false;
+    confirmTimer = 0.0f;
+    flickerTimer = 0.0f;
+    flickerVisible = true;
+    bgMagentaActive = false;
+    bgMagentaTimer = 0.0f;
+    bgFlickerTimer = 0.0f;
+    bgFlickerVisible = false;
+    for (int i = 0; i < 6; i++) {
+        itemAlphas[i] = 1.0f;
+        itemFadeTimers[i] = 0.0f;
+    }
 }
 
 void MainMenuState::update(float dt) {
@@ -104,6 +118,61 @@ void MainMenuState::update(float dt) {
         for (auto& item : menuItems) {
             item.animate.update(dt);
         }
+        lerpSelected += (curSelected - lerpSelected) * (1.0f - exp2f(-10.0f * dt));
+        botParallaxX += (0.0f - botParallaxX) * (1.0f - exp2f(-12.0f * dt));
+        botParallaxY += (0.0f - botParallaxY) * (1.0f - exp2f(-12.0f * dt));
+        return;
+    }
+
+    // Confirm animation tick
+    if (selectedSomething) {
+        confirmTimer += dt;
+
+        // Flicker
+        flickerTimer += dt;
+        if (flickerTimer >= 0.06f) {
+            flickerTimer -= 0.06f;
+            flickerVisible = !flickerVisible;
+        }
+
+        // Fade-out items
+        for (int i = 0; i < 6; i++) {
+            if (i == curSelected) continue;
+            itemFadeTimers[i] += dt;
+            float t = itemFadeTimers[i] / 0.4f;
+            if (t > 1.0f) t = 1.0f;
+            itemAlphas[i] = (1.0f - t) * (1.0f - t);
+        }
+
+        // Flicker BG magenta
+        if (ClientPrefs::flashing && bgMagentaActive) {
+            bgMagentaTimer += dt;
+            bgFlickerTimer += dt;
+            if (bgFlickerTimer >= 0.15f) {
+                bgFlickerTimer -= 0.15f;
+                bgFlickerVisible = !bgFlickerVisible;
+            }
+            if (bgMagentaTimer >= 1.1f) {
+                bgMagentaActive = false;
+                bgFlickerVisible = false;
+            }
+        }
+
+        if (confirmTimer >= 1.0f) {
+            if (curSelected == 0) switchState(new StoryMenuState());
+            else if (curSelected == 1) {
+                isTransitioningToFreeplay = true;
+                transitionTimer = 0.0f;
+                selectedSomething = false;
+            }
+            else if (curSelected == 2) switchState(new ModsMenuState());
+            else if (curSelected == 3) switchState(new CreditsState());
+            else if (curSelected == 4) switchState(new AchievementsMenuState());
+            else if (curSelected == 5) switchState(new OptionsMenuState());
+            return;
+        }
+
+        for (auto& item : menuItems) item.animate.update(dt);
         lerpSelected += (curSelected - lerpSelected) * (1.0f - exp2f(-10.0f * dt));
         botParallaxX += (0.0f - botParallaxX) * (1.0f - exp2f(-12.0f * dt));
         botParallaxY += (0.0f - botParallaxY) * (1.0f - exp2f(-12.0f * dt));
@@ -163,15 +232,18 @@ void MainMenuState::update(float dt) {
 
     if (keyJustPressed(KEY_A | KEY_START)) {
         AudioEngine::playSound("romfs:/preload/sounds/confirmMenu.ogg", 0.7f);
-        if (curSelected == 0) switchState(new StoryMenuState());
-        else if (curSelected == 1) {
-            isTransitioningToFreeplay = true;
-            transitionTimer = 0.0f;
+        selectedSomething = true;
+        confirmTimer = 0.0f;
+        flickerTimer = 0.0f;
+        flickerVisible = true;
+        for (int i = 0; i < 6; i++) {
+            itemFadeTimers[i] = 0.0f;
+            if (i != curSelected) itemAlphas[i] = 1.0f;
         }
-        else if (curSelected == 2) switchState(new ModsMenuState());
-        else if (curSelected == 3) switchState(new CreditsState());
-        else if (curSelected == 4) switchState(new AchievementsMenuState());
-        else if (curSelected == 5) switchState(new OptionsMenuState());
+        bgMagentaActive = true;
+        bgMagentaTimer = 0.0f;
+        bgFlickerTimer = 0.0f;
+        bgFlickerVisible = false;
     }
 
     if (keyJustPressed(KEY_B)) {
@@ -216,9 +288,18 @@ void MainMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
     float alpha = isTransitioningToFreeplay ? std::max(0.0f, 1.0f - (transitionTimer / 0.35f)) : 1.0f;
     float drawAlpha = introTimer * alpha;
 
+    bool magentaActive = selectedSomething &&
+        (!ClientPrefs::flashing || (ClientPrefs::flashing && bgFlickerVisible));
+
+    u32 bgClearCol = magentaActive ? C2D_Color32(253, 113, 155, 255)
+                                   : C2D_Color32(253, 232, 113, 255);
+    u8  bgTintR    = magentaActive ? 220 : 220;
+    u8  bgTintG    = magentaActive ?  40 : 120;
+    u8  bgTintB    = magentaActive ? 167 :  39;
+
     ClearTextBuf();
     C2D_SceneBegin(top);
-    C2D_TargetClear(top, C2D_Color32(253, 232, 113, 255)); // fde871
+    C2D_TargetClear(top, bgClearCol);
 
     if (bgSheet && topBG.tex) {
         // Calculate minimum scale to cover the 400x240 screen
@@ -247,28 +328,31 @@ void MainMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
         if (drawY < minY) drawY = minY;
         if (drawY > maxY) drawY = maxY;
         C2D_ImageTint tint;
-        C2D_PlainImageTint(&tint, C2D_Color32(220, 120, 39, (u8)(drawAlpha * 255.0f)), 1.0f);
+        C2D_PlainImageTint(&tint, C2D_Color32(bgTintR, bgTintG, bgTintB, (u8)(drawAlpha * 255.0f)), 1.0f);
         C2D_DrawImageAt(topBG, drawX, drawY, 0.1f, &tint, parallaxScale, parallaxScale);
     }
 
     for (int i = 0; i < 4; i++) {
         MenuItem& item = menuItems[i];
+        float myAlpha = itemAlphas[i];
+        if (selectedSomething && i == curSelected) myAlpha *= (flickerVisible ? 1.0f : 0.0f);
         C2D_ImageTint tint;
         C2D_ImageTint* tintPtr = nullptr;
-        if (item.isDarkened || drawAlpha < 1.0f) {
-            float itemAlpha = drawAlpha;
+        float finalAlpha = drawAlpha * myAlpha;
+        if (item.isDarkened || finalAlpha < 1.0f) {
+            float itemAlpha = finalAlpha;
             if (item.isDarkened) itemAlpha *= 0.3f;
-            C2D_AlphaImageTint(&tint, itemAlpha); 
+            C2D_AlphaImageTint(&tint, itemAlpha);
             tintPtr = &tint;
         }
         item.animate.drawCentered(item.x, item.y, 0.5f, 1.0f, 1.0f, tintPtr);
     }
 
     u32 textCol = C2D_Color32(255, 255, 255, (u8)(drawAlpha * 255.0f));
-    AddText("Snake Engine v2.6.7", 8, 225, 0.38f, false, 1.5f, textCol, 0.0f);
+    AddText("v2.6.7", 8, 225, 0.38f, false, 1.5f, textCol, 0.0f);
 
     C2D_SceneBegin(bottom);
-    C2D_TargetClear(bottom, C2D_Color32(253, 232, 113, 255)); // fde871
+    C2D_TargetClear(bottom, bgClearCol);
 
     if (bottomBGSheet && bottomBG.tex) {
         // Touch parallax: scale 1.10 so there's room to shift
@@ -285,18 +369,21 @@ void MainMenuState::draw(C3D_RenderTarget* top, C3D_RenderTarget* bottom) {
         if (drawY < 240.0f - bH) drawY = 240.0f - bH;
         if (drawY > 0.0f) drawY = 0.0f;
         C2D_ImageTint tint;
-        C2D_PlainImageTint(&tint, C2D_Color32(220, 120, 39, (u8)(drawAlpha * 255.0f)), 1.0f);
+        C2D_PlainImageTint(&tint, C2D_Color32(bgTintR, bgTintG, bgTintB, (u8)(drawAlpha * 255.0f)), 1.0f);
         C2D_DrawImageAt(bottomBG, drawX, drawY, 0.1f, &tint, bScale, bScale);
     }
 
     for (int i = 4; i < 6; i++) {
         MenuItem& item = menuItems[i];
+        float myAlpha = itemAlphas[i];
+        if (selectedSomething && i == curSelected) myAlpha *= (flickerVisible ? 1.0f : 0.0f);
         C2D_ImageTint tint;
         C2D_ImageTint* tintPtr = nullptr;
-        if (item.isDarkened || drawAlpha < 1.0f) {
-            float itemAlpha = drawAlpha;
+        float finalAlpha = drawAlpha * myAlpha;
+        if (item.isDarkened || finalAlpha < 1.0f) {
+            float itemAlpha = finalAlpha;
             if (item.isDarkened) itemAlpha *= 0.3f;
-            C2D_AlphaImageTint(&tint, itemAlpha); 
+            C2D_AlphaImageTint(&tint, itemAlpha);
             tintPtr = &tint;
         }
         item.animate.drawCentered(item.x, item.y, 0.5f, 1.0f, 1.0f, tintPtr);
